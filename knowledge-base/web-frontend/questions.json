@@ -1,0 +1,463 @@
+[
+  {
+    "job_type": "web-frontend",
+    "category": "problem_solving",
+    "section": "JavaScript与TypeScript",
+    "difficulty": "easy",
+    "question": "谈谈你对 JavaScript 原型链的理解？",
+    "key_points": [
+      "每个对象都有 __proto__ 属性指向构造函数的 prototype",
+      "在访问对象属性时，如果不存在则沿原型链向上查找",
+      "原型链的尽头是 null",
+      "通过原型链可以实现属性和方法的继承"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "problem_solving",
+    "section": "JavaScript与TypeScript",
+    "difficulty": "medium",
+    "question": "请解释什么是闭包（Closure），以及它的常见应用场景和潜在问题？",
+    "key_points": [
+      "闭包是能够访问另一个函数作用域变量的函数",
+      "应用场景：数据私有化、柯里化、防抖节流",
+      "潜在问题：变量常驻内存可能导致内存泄漏",
+      "解决方法：及时手动解除引用"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "problem_solving",
+    "section": "JavaScript与TypeScript",
+    "difficulty": "hard",
+    "question": "TypeScript 中的协变（Covariance）与逆变（Contravariance）是什么？在函数类型比较中如何应用？",
+    "key_points": [
+      "协变：子类型可以赋值给父类型（如对象属性）",
+      "逆变：父类型可以赋值给子类型（如函数参数）",
+      "在 TS 中，函数参数是逆变的，返回值是协变的",
+      "这保证了类型系统在调用时的安全性"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "business_scenario",
+    "section": "JavaScript与TypeScript",
+    "difficulty": "easy",
+    "question": "项目中需要处理一个深层嵌套的 JSON 对象，且部分属性可能不存在，你会如何优雅地获取数据并设定默认值？",
+    "key_points": [
+      "使用可选链操作符 (Optional Chaining) `?.` ",
+      "使用空值合并操作符 (Nullish Coalescing) `??` ",
+      "或使用 Lodash 的 _.get 方法作为兼容手段"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "business_scenario",
+    "section": "JavaScript与TypeScript",
+    "difficulty": "medium",
+    "question": "你需要实现一个通用的数据搜索框，要求支持输入关键字后进行防抖处理，并能在搜索失败时重试，请说明实现方案。",
+    "key_points": [
+      "使用 setTimeout 实现 debounce 闭包",
+      "封装带重试逻辑的 Promise (控制次数与延迟)",
+      "注意在输入更新时取消上一次未完成的请求"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "business_scenario",
+    "section": "JavaScript与TypeScript",
+    "difficulty": "hard",
+    "question": "针对核心业务模块的高并发异步调用（如同时请求 50 个接口），如何设计一个请求并发控制器来限制同屏只有 5 个请求在线？",
+    "key_points": [
+      "维护一个待处理队列和当前活跃计数值",
+      "利用 Promise.race 或递归调用实现“空位填充”",
+      "当一个请求完成时，立即取出队列下一个并执行"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "problem_solving",
+    "section": "CSS与页面布局",
+    "difficulty": "easy",
+    "question": "Flex 布局中 justify-content 和 align-items 的区别是什么？",
+    "key_points": [
+      "justify-content：控制主轴（Main Axis）的对齐",
+      "align-items：控制交叉轴（Cross Axis）的对齐",
+      "常见值：center, space-between, space-around"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "problem_solving",
+    "section": "CSS与页面布局",
+    "difficulty": "medium",
+    "question": "谈谈 CSS 权重计算规则，以及 !important 在什么情况下会失效？",
+    "key_points": [
+      "内联(1000) > ID(100) > 类/伪类(10) > 标签(1)",
+      "!important 具有最高优先级点，但无法覆盖更具体的 !important",
+      "Shadow DOM 中的样式隔离也可能使外部 !important 失效"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "problem_solving",
+    "section": "CSS与页面布局",
+    "difficulty": "hard",
+    "question": "什么是 BFC（块级格式化上下文）？如何触发它？它能解决哪些布局问题？",
+    "key_points": [
+      "BFC 是一块独立的渲染区域，内部元素不会影响外部",
+      "触发方式：overflow 不为 visible, float, position: absolute/fixed",
+      "解决问题：外边距重叠 (Margin Collapse), 清除浮动, 阻止元素被浮动元素覆盖"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "business_scenario",
+    "section": "CSS与页面布局",
+    "difficulty": "easy",
+    "question": "如何利用 CSS 实现垂直居中？请列举至少三种方案。",
+    "key_points": [
+      "Flexbox: justify-content: center + align-items: center",
+      "Grid: place-items: center",
+      "Transform: absolute + top: 50% + translate(-50%)"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "business_scenario",
+    "section": "CSS与页面布局",
+    "difficulty": "medium",
+    "question": "UI 提供了一个比例固定的响应式视频组件（16:9），在不知道父容器具体宽度的情况下，该如何实现？",
+    "key_points": [
+      "aspect-ratio: 16 / 9 (现代方案)",
+      "padding-bottom: 56.25% (经典方案，百分比基于宽度)",
+      "容器设为 relative，内容设为 absolute 100%"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "business_scenario",
+    "section": "CSS与页面布局",
+    "difficulty": "hard",
+    "question": "在大规模项目中，为了解决 CSS 类名污染和样式覆盖混乱，你会推荐使用哪种方案？（如 CSS Modules, Tailwind, CSS-in-JS）？",
+    "key_points": [
+      "CSS Modules: 利用哈希实现局部作用域隔离",
+      "Tailwind: 原子类约束，减少重复 CSS 与命名成本",
+      "CSS-in-JS: 强类型约束，支持根据 Props 动态生成样式"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "problem_solving",
+    "section": "框架原理 (Vue/React)",
+    "difficulty": "easy",
+    "question": "介绍一下 Vue 或 React 的组件生命周期，以及通常在哪一步发起网络请求？",
+    "key_points": [
+      "Vue: created/mounted (Vue3: onMounted)",
+      "React: componentDidMount (Hooks: useEffect with empty array)",
+      "在挂载后发起请求，避免阻塞初次渲染且能拿到 DOM"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "problem_solving",
+    "section": "框架原理 (Vue/React)",
+    "difficulty": "medium",
+    "question": "React 的虚拟 DOM 是什么？为什么要使用它？",
+    "key_points": [
+      "用 JS 对象描述真实的 DOM 树",
+      "跨平台：一份 VDO M 可渲染到 Web, Native, Canvas",
+      "批量更新（Batching）与重排优化，只修改变化的节点"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "problem_solving",
+    "section": "框架原理 (Vue/React)",
+    "difficulty": "hard",
+    "question": "深入谈谈 Vue 3 的响应式原理。Proxy 相比 Object.defineProperty 有哪些本质提升？",
+    "key_points": [
+      "Proxy 直接监听整个对象而非单一属性",
+      "支持监听数组索引修改与长度变化",
+      "支持 Map, Set 等集合，无需递归初始化所有属性"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "business_scenario",
+    "section": "框架原理 (Vue/React)",
+    "difficulty": "easy",
+    "question": "在单页应用 (SPA) 中，如何实现权限控制，让普通用户看不到管理页面？",
+    "key_points": [
+      "路由守卫（Router Guard）在跳转前检查 Token",
+      "动态路由加载：根据后端权限表 addRoutes",
+      "指令控制（如 v-permission）控制按钮级可见性"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "business_scenario",
+    "section": "框架原理 (Vue/React)",
+    "difficulty": "medium",
+    "question": "针对复杂的表单业务（如动态增减行、多级联动），如何设计状态管理避免组件树的大面积重复渲染？",
+    "key_points": [
+      "状态归一化（Normalization）",
+      "使用 Context or Memo 进行局部状态分发",
+      "解耦表单项，每个 Input 维护自己的独立订阅"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "business_scenario",
+    "section": "框架原理 (Vue/React)",
+    "difficulty": "hard",
+    "question": "如果你的项目需要同时支持多端（PC Web, 移动 H5, 甚至小程序），你会如何设计组件库的架构以最大化复用逻辑？",
+    "key_points": [
+      "逻辑与视图分离：封装 Headless UI 或自定义 Hooks",
+      "核心逻辑层基于 JS/TS 标准库，与环境无关",
+      "视图层提供不同平台的适配组件，但调用同一套 API"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "problem_solving",
+    "section": "前端工程化与工具链",
+    "difficulty": "easy",
+    "question": "npm install 背后发生了什么？package-lock.json 的作用是什么？",
+    "key_points": [
+      "查询 registry -> 计算依赖树 -> 缓存下载 -> 解压至 node_modules",
+      "lock 文件锁定版本号与拓扑结构，确保多人环境安装一致性"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "problem_solving",
+    "section": "前端工程化与工具链",
+    "difficulty": "medium",
+    "question": "谈谈 Webpack 中的 Loader 和 Plugin 的区别？",
+    "key_points": [
+      "Loader: 转换器。处理非 JS 文件（如 css-loader, babel-loader）",
+      "Plugin: 扩展器。作用于整个构建生命周期，处理打包优化、注入环境变量等"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "problem_solving",
+    "section": "前端工程化与工具链",
+    "difficulty": "hard",
+    "question": "Vite 为什么比 Webpack 更快？它的底层原理是什么？",
+    "key_points": [
+      "Webpack 是全量打包后再运行；Vite 基于浏览器原生 ESM ",
+      "按需加载：浏览器请求什么，Vite 转换什么",
+      "热更新（HMR）不受模块增加的影响，速度恒定"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "business_scenario",
+    "section": "前端工程化与工具链",
+    "difficulty": "easy",
+    "question": "为了规范团队代码风格，你会如何配置一套通用的工程化规范工具？",
+    "key_points": [
+      "ESLint (逻辑规范) + Prettier (风格规范)",
+      "Husky (Git Hooks Control) 控制提交前检查",
+      "Commitlint 规范 Git 提交信息"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "business_scenario",
+    "section": "前端工程化与工具链",
+    "difficulty": "medium",
+    "question": "线上包体积过大，请说明你会采取哪些具体手段来进行打包瘦身？",
+    "key_points": [
+      "开启 Tree-shaking 清除无效代码",
+      "使用 Webpack Bundle Analyzer 分析构成",
+      "第三方库按需引入或抽取至 CDN",
+      "图片压缩及路由懒加载"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "business_scenario",
+    "section": "前端工程化与工具链",
+    "difficulty": "hard",
+    "question": "设计一套前端 CI/CD 工作流，保证代码从提交到线上部署的质量。需要包含哪些核心步骤？",
+    "key_points": [
+      "Lint & Unit Test (必备卡点)",
+      "Build Artifact (构建产物)",
+      "Preview Deployment (预览环境供测试)",
+      "灰度发布或蓝绿发布逻辑"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "problem_solving",
+    "section": "性能优化与前端安全",
+    "difficulty": "easy",
+    "question": "什么是跨域（CORS）？如何解决前端跨域问题？",
+    "key_points": [
+      "受浏览器同源策略限制",
+      "解决方案：CORS 头（后端配合）、JSONP（仅 GET）、代理服务器（Nginx/Proxy）"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "problem_solving",
+    "section": "性能优化与前端安全",
+    "difficulty": "medium",
+    "question": "如何防御 XSS（跨站脚本攻击）？",
+    "key_points": [
+      "输入过滤与转义",
+      "设置 Content Security Policy (CSP)",
+      "设置 HttpOnly 属性防止 Cookie 被脚本读取"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "problem_solving",
+    "section": "性能优化与前端安全",
+    "difficulty": "hard",
+    "question": "谈谈浏览器渲染流水线，以及如何针对 FCP/LCP 进行性能指标优化？",
+    "key_points": [
+      "HTML->DOM, CSS->CSSOM, Layout, Paint, Composite",
+      "减少阻塞渲染的 JS/CSS",
+      "使用强缓存与 Service Worker 缓存关键资源"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "business_scenario",
+    "section": "性能优化与前端安全",
+    "difficulty": "easy",
+    "question": "用户反馈页面白屏时间过长，你应该从哪些地方着手，确认是网络问题还是代码问题？",
+    "key_points": [
+      "检查 Performance Tab 的 Waterfall ",
+      "查看 DNS 查询、TCP 握手时长",
+      "检查 JS 包大小与执行报错",
+      "检查是否为后端接口挂掉导致的长时间等待"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "business_scenario",
+    "section": "性能优化与前端安全",
+    "difficulty": "medium",
+    "question": "针对一个数据量极大的动态长列表，你会采用什么技术来保证滚动的丝滑度？",
+    "key_points": [
+      "虚拟列表 (Virtual Scroller)",
+      "使用 Intersection Observer 动态加载",
+      "控制 DOM 节点数量，复用已有节点"
+    ]
+  },
+  {
+    "job_type": "web-frontend",
+    "category": "business_scenario",
+    "section": "性能优化与前端安全",
+    "difficulty": "hard",
+    "question": "为了提升极其复杂的 Web 应用（如图形编辑器）的交互性能，除了常规手段外，你会考虑哪些黑科技？",
+    "key_points": [
+      "Web Workers 处理计算密集型任务",
+      "WebAssembly (WASM) 运行 C++ 等底层模块",
+      "OffscreenCanvas 实现离屏渲染"
+    ]
+  },
+  {
+    "id": "prj_201",
+    "job_type": "web-frontend",
+    "category": "project",
+    "question": "请讲一个让你最自豪的/技术挑战最大的项目，你扮演了什么角色取得了什么结果？",
+    "reference_answer": "【遵循 STAR 原则(情境、任务、行动、结果)】。不要只答业务增删改查。\n参考：【情境】项目是一个存在大量图表展示和复杂表单重构配置的业务系统，原有架构老旧（或者遇到严重卡顿）。【任务】作为前端核心/负责人主导了系统的基建和重构改造。【行动】从框架层面挑选Vue3+Pinia/React+Zustand重架构，抽离15+公用基础业务组件推送到内部镜像。采用懒加载和重写渲染逻辑(或者canvas画布改写)破除老系统的卡顿。【结果】提高了团队协同效率百分之30%，Lighthouse跑分LCP缩短1秒以上。",
+    "key_points": [
+      "STAR原则讲述全局闭环",
+      "跳脱CRUD，体现架构思考",
+      "使用数据支撑业务收益"
+    ],
+    "difficulty": "medium",
+    "section": "项目架构与复盘"
+  },
+  {
+    "id": "prj_202",
+    "job_type": "web-frontend",
+    "category": "project",
+    "question": "在项目中碰到过特别难调优的性能问题吗？可以详细说说整个链路吗？",
+    "reference_answer": "例如：接手时由于一个超大树形控件渲染卡废了应用。排查发现每点击一个节点就会引发顶级组件无脑下发导致全页面的 React/Vue Diff重排（深拷贝过度引发性能骤降）。我的干预优化是：1. 针对渲染机制使用 `React.memo` 或者 `SFC` 加依赖约束缓存避免无效重绘。2. 把树结构拍平为一维数组结合虚拟列表优化，DOM从几万个锐减到100个以内。最终 FPS 从30掉帧回稳到达 60，页面丝滑。",
+    "key_points": [
+      "利用性能监控分析瓶颈(Performance面板)",
+      "阻截无关的脏重绘",
+      "算法级降维改变渲染策略"
+    ],
+    "difficulty": "hard",
+    "section": "性能调优实战"
+  },
+  {
+    "id": "prj_203",
+    "job_type": "web-frontend",
+    "category": "project",
+    "question": "在前端团队内或者项目迭代中，你做过哪些工程化/基准建设的工作？",
+    "reference_answer": "针对团队新人多、代码规范混乱的问题，我主导了【研发流水线增强】。1. 统一接入 ESlint、Prettier 以及 Git Husky 做提交卡点拦截(Lint-staged)，将规范固化。2. 编写了 CLI 提效工具及通用的脚手架模板，将新项目的开箱成本缩减到了2分钟。 3. 在构建层面排查了 Webpack 的冗余 Loader，引入 Vite 的 ES-build 转译把开发环境 HMR 热更新从数十秒提高到了毫秒级。",
+    "key_points": [
+      "Lint/Husky流水卡点机制规范化",
+      "构建工具调参",
+      "内部研发效能提效"
+    ],
+    "difficulty": "hard",
+    "section": "前端工程化落地"
+  },
+  {
+    "id": "bhv_301",
+    "job_type": "web-frontend",
+    "category": "behavioral",
+    "question": "经常有紧急任务突然插队，并且产品给的时间非常紧，你甚至觉得做不完，这时候怎么应对排期？",
+    "reference_answer": "绝对不一口回绝也不能硬接下来导致系统延期爆雷。步骤：1. 【划分优先级】运用重要/紧急四象限拆解，向提需人确认这个需的核心痛点。2. 【讨价还价减减法】进行需求妥协，商议出第一阶段上线的 MVP(最小可用产品版)先行。将高风险长链条的附属功能推入二期迭代。 3. 【向上管理寻求资源】将工时红线摆上台面请求主管帮助协调人力分摊开发，同时防备项目交付粗糙必须在项目复盘会议中提出建立更合理的发版流程规范。",
+    "key_points": [
+      "应用 MVP 思想砍需求减配",
+      "优先级四象限管理",
+      "向上管理和暴露风险寻找支援"
+    ],
+    "difficulty": "medium",
+    "section": "项目管理与排期"
+  },
+  {
+    "id": "bhv_302",
+    "job_type": "web-frontend",
+    "category": "behavioral",
+    "question": "遇到前后端对接时，发现后端开出的接口结构反人类、嵌套极深且响应很慢，还强行丢给前端处理，你会怎么办？",
+    "reference_answer": "以“为了优化最终用户体验”为大前提（而不是推诿抱怨）。1. 客观摆出数据：用 Postman 等工具给出当前接口速度会导致白屏的数据报告，阐述在前端用JS强行清洗这类畸形结构造成维护成本陡增并容易引发异常崩溃。2. 给出替代方案草案：给出我心里理想的聚合 JSON 格式，看看是否可以协调中间加一层聚合。3. 【底线妥协】：如果在强时间压力下后端确实无法重构，我们可以写一层专门的适配层（Adapter）防腐或者在BFF (Node层)中专门转接过渡，但必须拉群报备PM及TL作为技术债录入文档。",
+    "key_points": [
+      "拿数据论证不合理性",
+      "为用户体验(延时)担责作为压标利器",
+      "提出解决方案及设计BFF防腐手段代替纯抱怨"
+    ],
+    "difficulty": "medium",
+    "section": "沟通协作"
+  },
+  {
+    "id": "bhv_303",
+    "job_type": "web-frontend",
+    "category": "behavioral",
+    "question": "如果工作中你和研发组长/TL在技术选型上产生了严重分歧（你的技术更潮他更保守），你一般怎么处理？",
+    "reference_answer": "首先明确 TL 的考量更多在业务稳定性与学习成本上，这属于正常现象。我会采用【灰度验证兼论述】的做法。写一个小型 Demo 展示我推崇的新技术(比如从 Webpack 升到 Vite)能够确凿带来几十秒甚至量级上的冷启动时间减少的直接证据，并且列出该新旧技术的维护成本平滑迁移表和坑点。如果论证详尽后TL依然认为保守为上，我会执行最终决策。团队统一性大于个人主观偏好。",
+    "key_points": [
+      "尊重业务求稳",
+      "数据和 Demo Proof 证明收益化解担忧",
+      "大局为重服从统一性"
+    ],
+    "difficulty": "medium",
+    "section": "技术路线冲突解决"
+  },
+  {
+    "id": "bhv_304",
+    "job_type": "web-frontend",
+    "category": "behavioral",
+    "question": "线上系统突然出现P0级别故障，白屏了，作为接触对应模块的前端，你会怎么做？",
+    "reference_answer": "1. 【首要止血规避影响】：必须先第一时间降级或切分支（通知运维回滚到最近稳定的版本上线），必须先让系统可用。 2. 【搜集定位】：止血后利用埋点系统（如 Sentry 等）、抓取用户操作日志以及排查最近的发版记录，拉出出问题的 SourceMap 层去精确寻找代码块。 3. 【复现排错】：本地复现边界条件，修复补丁。 4. 【事故复盘】：修复后必须撰写复盘文档反思为何这类问题突破了测试漏眼，制定相应的卡点手段（添加流水线单元测试/重绘测试校验）。",
+    "key_points": [
+      "第一要务回滚止血降低资损",
+      "利用错误收集与监控捕获源头",
+      "事故沉淀及研发防腐纠正"
+    ],
+    "difficulty": "medium",
+    "section": "应急处理能力"
+  }
+]

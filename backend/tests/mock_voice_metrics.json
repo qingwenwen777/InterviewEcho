@@ -1,0 +1,68 @@
+[
+  {
+    "duration_sec": 28.5,
+    "transcript": "嗯，HashMap 是基于数组加链表实现的，然后在 JDK 1.8 之后引入了红黑树优化。就是当链表长度超过 8 的时候会转成红黑树，这样查询效率会更高。",
+    "segments": [
+      {"start": 0.0, "end": 8.2, "text": "嗯，HashMap 是基于数组加链表实现的，"},
+      {"start": 8.2, "end": 18.5, "text": "然后在 JDK 1.8 之后引入了红黑树优化。"},
+      {"start": 18.5, "end": 28.5, "text": "就是当链表长度超过 8 的时候会转成红黑树，这样查询效率会更高。"}
+    ],
+    "wpm": 215.0,
+    "char_count": 102,
+    "pause_ratio": 0.17,
+    "long_pause_count": 1,
+    "filler_words": [
+      {"word": "嗯", "count": 1},
+      {"word": "然后", "count": 1},
+      {"word": "就是", "count": 1}
+    ],
+    "filler_total": 3,
+    "pitch_mean": 178.5,
+    "pitch_std": 13.2,
+    "volume_mean": 0.052,
+    "volume_std": 0.011
+  },
+  {
+    "duration_sec": 45.0,
+    "transcript": "那个，关于 Vue 3 的 Composition API，其实它最大的优势就是逻辑复用。然后呢，相比 Options API，它把相关逻辑聚合在一起，比如说一个功能的响应式数据、计算属性、方法都可以放在同一个 setup 函数里。",
+    "segments": [
+      {"start": 0.0, "end": 15.0, "text": "那个，关于 Vue 3 的 Composition API，其实它最大的优势就是逻辑复用。"},
+      {"start": 15.0, "end": 30.0, "text": "然后呢，相比 Options API，它把相关逻辑聚合在一起，"},
+      {"start": 30.0, "end": 45.0, "text": "比如说一个功能的响应式数据、计算属性、方法都可以放在同一个 setup 函数里。"}
+    ],
+    "wpm": 175.0,
+    "char_count": 131,
+    "pause_ratio": 0.22,
+    "long_pause_count": 3,
+    "filler_words": [
+      {"word": "那个", "count": 1},
+      {"word": "其实", "count": 1},
+      {"word": "然后", "count": 1},
+      {"word": "比如说", "count": 1},
+      {"word": "就是", "count": 1}
+    ],
+    "filler_total": 5,
+    "pitch_mean": 165.0,
+    "pitch_std": 22.5,
+    "volume_mean": 0.038,
+    "volume_std": 0.018
+  },
+  {
+    "duration_sec": 22.0,
+    "transcript": "过拟合的话，可以从数据增强、正则化、Dropout、提前停止这几个方面入手。我之前在做图像分类项目时，主要用了数据增强加 L2 正则化，效果比较明显。",
+    "segments": [
+      {"start": 0.0, "end": 11.0, "text": "过拟合的话，可以从数据增强、正则化、Dropout、提前停止这几个方面入手。"},
+      {"start": 11.0, "end": 22.0, "text": "我之前在做图像分类项目时，主要用了数据增强加 L2 正则化，效果比较明显。"}
+    ],
+    "wpm": 245.0,
+    "char_count": 90,
+    "pause_ratio": 0.10,
+    "long_pause_count": 0,
+    "filler_words": [],
+    "filler_total": 0,
+    "pitch_mean": 195.0,
+    "pitch_std": 10.5,
+    "volume_mean": 0.061,
+    "volume_std": 0.008
+  }
+]

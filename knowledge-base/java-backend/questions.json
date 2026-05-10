@@ -1,0 +1,538 @@
+[
+  {
+    "job_type": "java-backend",
+    "category": "problem_solving",
+    "section": "Java基础",
+    "difficulty": "easy",
+    "question": "谈谈 Java 中的 ArrayList 和 LinkedList 的区别？",
+    "key_points": [
+      "ArrayList 基于动态数组，支持 O(1) 随机访问",
+      "LinkedList 基于双向链表，随机访问为 O(n)",
+      "ArrayList 插入删除可能需要移动元素",
+      "LinkedList 插入删除仅需修改指针（已知位置）"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "problem_solving",
+    "section": "Java基础",
+    "difficulty": "medium",
+    "question": "HashMap 的底层实现原理是什么？从 JDK 1.7 到 1.8 有哪些重大改进？",
+    "key_points": [
+      "1.7 数组 + 链表；1.8 数组 + 链表 + 红黑树",
+      "1.8 链表长度超过 8 且数组长度超过 64 时转红黑树",
+      "1.8 采用尾插法避免死循环",
+      "扩容机制从全部移动改为高位低位平衡"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "problem_solving",
+    "section": "Java基础",
+    "difficulty": "hard",
+    "question": "Java 中的泛型擦除是什么？为什么需要擦除？泛型擦除会带来哪些问题？",
+    "key_points": [
+      "泛型信息仅存在于编译期，字节码中不保留（类型强转）",
+      "兼容老版本 Java 代码",
+      "无法直接创建泛型对象、无法在静态上下文中直接使用",
+      "反射可以绕过泛型检查"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "business_scenario",
+    "section": "Java基础",
+    "difficulty": "easy",
+    "question": "代码评审中发现有人在循环中使用 '+' 拼接长字符串，你会如何建议修改？",
+    "key_points": [
+      "使用 StringBuilder 或 StringBuffer",
+      "循环内 '+' 会频繁创建新的 String 对象，导致堆压力大",
+      "介绍 StringBuilder 的非线程安全与高效性"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "business_scenario",
+    "section": "Java基础",
+    "difficulty": "medium",
+    "question": "针对线上项目出现内存持续缓慢上升（疑似内存泄漏），你会通过哪些工具和步骤来排查？",
+    "key_points": [
+      "使用 jmap 导出堆快照 (Heap Dump)",
+      "使用 MAT 或 JProfiler 分析对象引用链",
+      "关注 ThreadLocal 是否未释放或集合过度持有对象",
+      "观察 Full GC 后的堆内存水位变化"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "business_scenario",
+    "section": "Java基础",
+    "difficulty": "hard",
+    "question": "由于遗留代码中大量使用单一集合处理海量订单数据导致响应慢，请说明你的重构思路？",
+    "key_points": [
+      "考虑分段处理或分页加载",
+      "评估数据结构（如使用 TreeMap 替代后序排序）",
+      "引入并行流 (Parallel Stream) 充分利用多核",
+      "若内存不足，考虑改为流式读取处理，不一次性加载入内存"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "problem_solving",
+    "section": "并发编程",
+    "difficulty": "easy",
+    "question": "Java 线程有哪些状态？它们之间是如何转换的？",
+    "key_points": [
+      "NEW, RUNNABLE, BLOCKED, WAITING, TIMED_WAITING, TERMINATED",
+      "wait/notify 引发 WAITING",
+      "synchronized 竞争引发 BLOCKED"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "problem_solving",
+    "section": "并发编程",
+    "difficulty": "medium",
+    "question": "谈谈你对 volatile 关键字的理解？它能保证原子性吗？",
+    "key_points": [
+      "保证可见性：强制刷新主存",
+      "禁止指令重排序：内存屏障",
+      "不保证原子性（如 i++ 依然不安全）"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "problem_solving",
+    "section": "并发编程",
+    "difficulty": "hard",
+    "question": "AQS (AbstractQueuedSynchronizer) 的核心原理是什么？它是如何实现公平/非公平锁的？",
+    "key_points": [
+      "State 变量 + CLH 双向队列",
+      "CAS 自旋获取资源",
+      "非公平锁：允许新来的线程直接 CAS 抢占；公平锁：必须去队列排队"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "business_scenario",
+    "section": "并发编程",
+    "difficulty": "easy",
+    "question": "在一个简单的统计业务中，如何保证多线程环境下累加计数器的准确性？",
+    "key_points": [
+      "使用 AtomicInteger/AtomicLong",
+      "原理是 CAS 自旋",
+      "高并发下推荐使用 LongAdder（热点分离）"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "business_scenario",
+    "section": "并发编程",
+    "difficulty": "medium",
+    "question": "你需要设计一个本地任务调度器，既要保证并发度又要限制最大线程数，你会如何配置线程池？",
+    "key_points": [
+      "ThreadPoolExecutor 参数：core, max, queue, handler",
+      "CPU 密集型 vs I/O 密集型配置策略",
+      "监控队列长度，避免无界队列导致 OOM"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "business_scenario",
+    "section": "并发编程",
+    "difficulty": "hard",
+    "question": "排查生产环境下的死锁问题，你通常会使用哪些指令，并简述死锁发生的四个必要条件？",
+    "key_points": [
+      "jstack 查看线程堆栈",
+      "jconsole 或 VisualVM 图形化观察",
+      "条件：互斥、请求与保持、不剥夺、循环等待"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "problem_solving",
+    "section": "JVM原理",
+    "difficulty": "easy",
+    "question": "介绍一下 JVM 的运行时数据区（内存布局）？",
+    "key_points": [
+      "栈 (Stack), 堆 (Heap), 方法区 (Metaspace)",
+      "程序计数器, 本地方法栈",
+      "区分线程共有与私有区域"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "problem_solving",
+    "section": "JVM原理",
+    "difficulty": "medium",
+    "question": "简述对象垃圾回收的可达性分析算法及其 GC Roots 包括哪些？",
+    "key_points": [
+      "通过 GC Roots 向下搜索引用链",
+      "GC Roots：虚拟机栈变量、方法区静态变量/常量、JNI 引用"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "problem_solving",
+    "section": "JVM原理",
+    "difficulty": "hard",
+    "question": "G1 垃圾收集器的 Region 设计解决了什么问题？它的混合回收 (Mixed GC) 逻辑是怎样的？",
+    "key_points": [
+      "将堆化整为零，避免全堆回收的长时间 STW",
+      "可预测的停顿时间模型",
+      "混合回收会选择部分 Old Region 和所有 Young Region"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "business_scenario",
+    "section": "JVM原理",
+    "difficulty": "easy",
+    "question": "如果你发现应用启动非常慢，且频繁报 Metaspace 异常，你会关注哪些代码行为？",
+    "key_points": [
+      "大量动态代理（CGLIB）的创建",
+      "过大的反射类缓存",
+      "通过 jstat 观察元空间增长趋势"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "business_scenario",
+    "section": "JVM原理",
+    "difficulty": "medium",
+    "question": "线上应用 CPU 飙升到 100%，请通过命令演示寻找出问题的具体 Java 线程的过程？",
+    "key_points": [
+      "top 找到耗时进程",
+      "top -Hp <pid> 找到耗时 LWP",
+      "printf '%x\n' <tid> 转为十六进制",
+      "jstack 匹配对应的 nid"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "business_scenario",
+    "section": "JVM原理",
+    "difficulty": "hard",
+    "question": "由于频繁触发 Full GC 导致系统卡顿，请谈谈你的参数调优思路？",
+    "key_points": [
+      "排查内存泄漏是前提",
+      "调整初始/最大堆大小一致，减少抖动",
+      "调整新生代、老年代比例或晋升年龄阀值",
+      "选择更合适的 GC 器（如 ZGC 应对超大堆）"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "problem_solving",
+    "section": "Spring框架与工程化",
+    "difficulty": "easy",
+    "question": "什么是 Spring 的控制反转 (IoC) 和依赖注入 (DI)？",
+    "key_points": [
+      "容器平衡对象生命周期，降低解耦",
+      "注入方式：Setter 注入、构造器注入、字段注入"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "problem_solving",
+    "section": "Spring框架与工程化",
+    "difficulty": "medium",
+    "question": "Spring AOP 的底层实现原理是什么？JDK 代理与 CGLIB 代理有何区别？",
+    "key_points": [
+      "动态代理 + 字节码增强",
+      "JDK 需要接口实现；CGLIB 通过生成子类（无法代理 final 类）"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "problem_solving",
+    "section": "Spring框架与工程化",
+    "difficulty": "hard",
+    "question": "Spring 如何通过三级缓存机制解决循环依赖？为什么必须是三级？",
+    "key_points": [
+      "一级（成品）, 二级（半成品）, 三级（代理对象工厂）",
+      "三级缓存的存在是为了处理 AOP 代理场景，确保获取到的始终是代理后的单例"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "business_scenario",
+    "section": "Spring框架与工程化",
+    "difficulty": "easy",
+    "question": "在使用 @Transactional 注解时，遇到事务不生效的情况，你会想到哪些可能的原因？",
+    "key_points": [
+      "方法非 public 或内部调用",
+      "数据库引擎不支持事务",
+      "异常未抛出或被异常过滤",
+      "未被 Spring 代理的对象直接调用"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "business_scenario",
+    "section": "Spring框架与工程化",
+    "difficulty": "medium",
+    "question": "项目需要接入第三方支付回调，如何优雅地利用 Spring 的事件机制 (Event) 来实现解耦？",
+    "key_points": [
+      "定义 ApplicationEvent 子类",
+      "使用 ApplicationEventPublisher 发布",
+      "@EventListener 或实现监听接口处理异步回调"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "business_scenario",
+    "section": "Spring框架与工程化",
+    "difficulty": "hard",
+    "question": "设计一个 Spring Boot Starter，需要考虑哪些核心组件 and 机制？",
+    "key_points": [
+      "spring.factories (3.0 之前) 或 .imports (之后) 的 SPI 声明",
+      "@Configuration 自动配置类",
+      "@ConditionalXXX 条件注解控制开启",
+      "@ConfigurationProperties 配置映射"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "problem_solving",
+    "section": "数据库与缓存",
+    "difficulty": "easy",
+    "question": "MySQL 的事务隔离级别有哪些？默认是哪个？",
+    "key_points": [
+      "Read Uncommitted, Read Committed, Repeatable Read, Serializable",
+      "MySQL InnoDB 默认为 RR",
+      "解释脏读、不可重复读、幻读的概念"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "problem_solving",
+    "section": "数据库与缓存",
+    "difficulty": "medium",
+    "question": "Explain 命令输出的关键词中，type 和 extra 分别代表什么含义？哪些情况说明索引失效？",
+    "key_points": [
+      "type: system > const > eq_ref > ref > range > index > all",
+      "Extra: Using index, Using filesort, Using temporary (危险指标)",
+      "失效：使用了函数计算、类型不匹配、模糊匹配头部通配"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "problem_solving",
+    "section": "数据库与缓存",
+    "difficulty": "hard",
+    "question": "Redis AOF 与 RDB 的区别及持久化策略选择？",
+    "key_points": [
+      "RDB（快照）：定时全量备份，恢复块，数据容易丢",
+      "AOF（追加日志）：记录指令，数据全，体积大",
+      "混合持久化（4.0+ 推荐）"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "business_scenario",
+    "section": "数据库与缓存",
+    "difficulty": "easy",
+    "question": "由于查询逻辑导致的 MySQL 慢查询，你通常的优化步骤是什么？",
+    "key_points": [
+      "慢查询日志定位 SQL",
+      "分析 Explain 执行计划",
+      "按最左匹配原则补齐索引",
+      "考虑分表或增加从库"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "business_scenario",
+    "section": "数据库与缓存",
+    "difficulty": "medium",
+    "question": "在高并发读写的场景下，如何保证 Redis 与数据库的数据一致性？",
+    "key_points": [
+      "先更新 DB，再删除缓存（Cache Aside）",
+      "延迟双删策略",
+      "监听 Binlog 异步更新缓存",
+      "根据一致性要求选择（弱一致性 vs 强一致性方案）"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "business_scenario",
+    "section": "数据库与缓存",
+    "difficulty": "hard",
+    "question": "如何利用 Redis 实现一个具备分布式限流能力的组件？请选择一种算法讨论并说明理由。",
+    "key_points": [
+      "固定窗口、滑动窗口（原子增量）",
+      "令牌桶、漏桶（Lua 脚本实现逻辑）",
+      "使用 Redis 的优点：共享状态、高性能、原子性"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "problem_solving",
+    "section": "分布式与微服务架构",
+    "difficulty": "easy",
+    "question": "什么是 SOA 与微服务？它们的主要区别是什么？",
+    "key_points": [
+      "微服务颗粒度更细，强调高自治、去中心化",
+      "SOA 常用 ESB 总线；微服务常用 REST/gRPC"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "problem_solving",
+    "section": "分布式与微服务架构",
+    "difficulty": "medium",
+    "question": "谈谈你对 CAP 定理和 BASE 理论的理解？",
+    "key_points": [
+      "Consistency, Availability, Partition Tolerance (不可能三角)",
+      "BASE：基本可用、软状态、最终一致性"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "problem_solving",
+    "section": "分布式与微服务架构",
+    "difficulty": "hard",
+    "question": "分布式事务常见的解决方案有哪些？2PC, TCC, Seata 分别适用于什么场景？",
+    "key_points": [
+      "强一致：2PC, 3PC (开销大)",
+      "最终一致：TCC (侵入强), 消息队列可靠性投递",
+      "Seata AT 模式：无侵入但依赖 DB 关系模型"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "business_scenario",
+    "section": "分布式与微服务架构",
+    "difficulty": "easy",
+    "question": "当微服务中的某个子模块挂掉导致整个链路雪崩，你会通过哪些手段来防止这类系统灾难？",
+    "key_points": [
+      "超时控制",
+      "熔断降级（Sentinel / Hystrix）",
+      "线程池隔离 / 信号量隔离"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "business_scenario",
+    "section": "分布式与微服务架构",
+    "difficulty": "medium",
+    "question": "你需要设计一个分布式 ID 生成器，请说明 Snowflake 算法的优势以及可能的时钟回拨问题处理？",
+    "key_points": [
+      "Snowflake：时间戳 + 工作机器 + 序列号",
+      "回拨处理：抛出异常停止服务或等待时钟追赶"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "business_scenario",
+    "section": "分布式与微服务架构",
+    "difficulty": "hard",
+    "question": "设计一个跨服务调用的链路追踪系统，简述 traceId, spanId 的传递逻辑？",
+    "key_points": [
+      "通过 HTTP Header 携带上下文",
+      "过滤器拦截记录开始、结束时间",
+      "异步采集到中心节点上报（SkyWalking / Zipkin）"
+    ]
+  },
+  {
+    "job_type": "java-backend",
+    "category": "project",
+    "question": "请描述一下你做过的最复杂的一个项目，以及其中你在技术上解决了什么挑战？",
+    "reference_answer": "在描述时使用STAR法则（Situation，Task，Action，Result）。例如：在XX电商系统中，作为后端开发，我们遇到了高并发秒杀场景下数据库压力过大的挑战(Situation&Task)。我引入了Redis缓存库存信息，采用Lua脚本保证预扣库存的原子性，并结合RabbitMQ进行异步削峰填谷，最后采用分布式锁防止超卖(Action)。这样使得系统在10万QPS下依然保持稳定，接口响应时间降低了80%(Result)。",
+    "key_points": [
+      "STAR法则",
+      "高并发场景",
+      "缓存及组件使用",
+      "数据库压力缓解",
+      "具体的可量化成果"
+    ],
+    "difficulty": "hard",
+    "section": "项目深挖"
+  },
+  {
+    "job_type": "java-backend",
+    "category": "project",
+    "question": "你的项目中如何保证数据一致性的？",
+    "reference_answer": "主要提到分布式事务和本地事务的结合。1. 使用关系型数据库的ACID特性保证本地事务一致性。 2. 结合Redis与MySQL的场景下，可以采用延迟双删+缓存过期机制，或者利用Canal订阅MySQL Binlog来解耦实现一致性。 3. 在分布式系统（微服务）中，采用RocketMQ等消息队列的事务消息实现最终一致性，或引入Seata实现AT、TCC模式强/弱一致性补偿。",
+    "key_points": [
+      "本地事务控制",
+      "缓存与数据库一致性",
+      "Binlog订阅",
+      "消息队列事务消息",
+      "最终一致性"
+    ],
+    "difficulty": "hard",
+    "section": "项目深挖"
+  },
+  {
+    "job_type": "java-backend",
+    "category": "project",
+    "question": "你在项目里是如何处理Redis缓存击穿和雪崩问题的？",
+    "reference_answer": "在我们的xx系统中(Situation)，面对突发的爆款商品查询，出现了热点Key过期的缓存击穿风险及大面积Key同时失效的缓存雪崩风险(Task)。针对击穿，我采用了互斥锁（Redisson Distributed Lock）方案，使得只有一个线程去查DB并重建缓存，其余线程等待或重试；针对雪崩，我对缓存过期时间加上了随机值（例如原过期时间+随机1-5分钟），并设置了热点数据永不过期或后台定时任务异步刷新缓存(Action)，成功将DB峰值压力降低了90%，保证了系统的高可用(Result)。",
+    "key_points": [
+      "缓存击穿场景与互斥锁",
+      "缓存雪崩场景与随机过期时间",
+      "热点数据永不过期",
+      "Redisson分布式锁应用"
+    ],
+    "difficulty": "medium",
+    "section": "项目深挖"
+  },
+  {
+    "job_type": "java-backend",
+    "category": "behavioral",
+    "question": "如果你的主管给你的任务时间非常紧，你该怎么处理？",
+    "reference_answer": "首先不应该盲目拒绝或盲目接受。第一步：评估任务的优先级与排期，细化任务节点。第二步：与主管沟通，明确必须要先实现的核心功能点是什么（MVP），能否分阶段交付。第三步：如果确认无论如何都存在风险，会协调其他资源支持或通过加急处理，同时每日汇报进度以便主管随时掌握情况并调整计划。",
+    "key_points": [
+      "任务细化与工作量评估",
+      "区分核心诉求（MVP优先）",
+      "及时且透明的沟通",
+      "合理协调资源"
+    ],
+    "difficulty": "medium",
+    "section": "抗压与沟通"
+  },
+  {
+    "job_type": "java-backend",
+    "category": "behavioral",
+    "question": "如果在团队开发中，你与同事在技术选型或方案上发生分歧，你会如何解决？",
+    "reference_answer": "首先明确大家的共同目标是为了项目好。我会请求双方分别列出自己方案的优缺点（从开发成本、维护性、性能等方面考虑）以及数据论证。如果争论不休，我会提议引入团队中的资深工程师或技术Leader一起评审，基于客观事实和技术业务契合度来做出决策；一旦决策做出，即使不是我的方案，我也会全力以赴去配合执行。",
+    "key_points": [
+      "求同存异/项目优先",
+      "客观数据论证方案",
+      "引入第三方评审决策",
+      "决策后全力配合"
+    ],
+    "difficulty": "medium",
+    "section": "团队协作"
+  },
+  {
+    "job_type": "java-backend",
+    "category": "behavioral",
+    "question": "如果接手了一个完全没有文档、代码质量很差的遗留老系统并要求你加新功能，你会怎么做？",
+    "reference_answer": "首先控制情绪，不抱怨。我会分为三步走：1. 梳理核心链路：通过监控、打日志或抓包，理清现有系统的核心业务流和外部交互接口，确保不在黑盒中乱改。2. 编写测试用例：对要修改的核心路径编写单元测试或接口测试（如果条件允许），用测试用例作为系统的说明书，确保改动不影响原有功能。3. 小步迭代与重构：在加新功能的地方采取防御性编程（如特征开关、桥接模式），把新旧代码隔离。在有余力的情况下，按照“童子军原则”对途经的烂代码做小范围的安全重构，慢慢改善系统。",
+    "key_points": [
+      "梳理核心链路流向",
+      "补充自动化测试护航",
+      "引入防腐层/新老代码隔离",
+      "持续小步安全重构"
+    ],
+    "difficulty": "medium",
+    "section": "工程实践"
+  },
+  {
+    "job_type": "java-backend",
+    "category": "behavioral",
+    "question": "如果在面试时遇到一道完全没思路的算法题，或者遇到对最新的 AI 大模型知识（比如大模型的幻觉等问题）知之甚少，你该怎么和面试官交流？",
+    "reference_answer": "遇到知识盲区是正常的，关键是保持镇定展现出解决问题的逻辑体系和求知欲。对于算法题，我会坦诚表达目前没有最有解，但我会和面试官确认暴力解法或先讲述我熟悉的替代或近似算法（如不会堆排序但可以说说快排/归并的思想），并且我习惯通过纸笔举个例子，推演一下看能否发现规律；对于大模型等新技术盲区，我会坦承目前掌握不够全面，仅了解到它是因为数据分布、压缩误差等原因产生的错误输出现象（幻觉），并表态自己会后会重点拉通这块资讯，也可以尝试请教面试官他们的团队是如何处理这些痛点的。",
+    "key_points": [
+      "坦诚盲区但不轻言放弃",
+      "先提暴力解或替代方案",
+      "向面试官请教与互动推演",
+      "展现持续学习能力"
+    ],
+    "difficulty": "easy",
+    "section": "学习能力与沟通"
+  }
+]
