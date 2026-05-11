@@ -79,6 +79,11 @@ const FALLBACK_ROLES = [
 ]
 
 const DIFFICULTIES = ['简单', '中等', '困难']
+const SECTION_SKELETON_GROUPS = [
+  { label: '基础技术', widths: [88, 112, 96, 132] },
+  { label: '工程能力', widths: [150, 176, 102, 92] },
+  { label: '软技能', widths: [98, 136, 112] },
+]
 const EVALUATION_POLL_INTERVAL_MS = 2500
 
 function evaluationStatusText(status) {
@@ -873,11 +878,49 @@ function DashboardPage() {
   const [roles, setRoles] = useState(FALLBACK_ROLES)
   const [loading, setLoading] = useState(true)
   const [selectedRole, setSelectedRole] = useState(null)
+  const [sectionCache, setSectionCache] = useState({})
+  const sectionCacheRef = useRef({})
   const [starting, setStarting] = useState(false)
   const [startingCopy, setStartingCopy] = useState({
     title: '正在准备面试房间',
     text: '面试官正在读取配置。',
   })
+
+  const writeSectionCache = useCallback((key, entry) => {
+    const next = { ...sectionCacheRef.current, [key]: entry }
+    sectionCacheRef.current = next
+    setSectionCache(next)
+  }, [])
+
+  const fetchSectionsForRole = useCallback(
+    async (role, { silent = true, retryFailed = false } = {}) => {
+      const key = role?.key
+      if (!key) return []
+
+      const cached = sectionCacheRef.current[key]
+      if (
+        cached?.status === 'ready' ||
+        cached?.status === 'loading' ||
+        (cached?.status === 'failed' && !retryFailed)
+      ) {
+        return cached.items || []
+      }
+
+      writeSectionCache(key, { status: 'loading', items: cached?.items || [] })
+
+      try {
+        const { data } = await api.get(`/interview/roles/${key}/sections`)
+        const items = Array.isArray(data) ? data : []
+        writeSectionCache(key, { status: 'ready', items })
+        return items
+      } catch {
+        writeSectionCache(key, { status: 'failed', items: [] })
+        if (!silent) toast('知识点列表暂时不可用，将按完整流程面试。', 'warning')
+        return []
+      }
+    },
+    [toast, writeSectionCache],
+  )
 
   useEffect(() => {
     let alive = true
@@ -896,6 +939,16 @@ function DashboardPage() {
       alive = false
     }
   }, [toast])
+
+  useEffect(() => {
+    if (loading) return
+    roles.forEach((role) => fetchSectionsForRole(role, { silent: true }))
+  }, [fetchSectionsForRole, loading, roles])
+
+  const openSettings = (role) => {
+    setSelectedRole(role)
+    fetchSectionsForRole(role, { silent: false, retryFailed: true })
+  }
 
   const handleStart = async (settings) => {
     const hasRepos = (settings.repo_urls || []).length > 0
@@ -946,7 +999,13 @@ function DashboardPage() {
 
       <div className="role-grid">
         {roles.map((role, index) => (
-          <button className="role-card" key={role.id || role.key || role.name} onClick={() => setSelectedRole(role)}>
+          <button
+            className="role-card"
+            key={role.id || role.key || role.name}
+            onClick={() => openSettings(role)}
+            onFocus={() => fetchSectionsForRole(role, { silent: true })}
+            onMouseEnter={() => fetchSectionsForRole(role, { silent: true })}
+          >
             <div className="role-icon">{roleIcon(index)}</div>
             <div className="role-card-body">
               <span className="tag">岗位 {String(index + 1).padStart(2, '0')}</span>
@@ -958,17 +1017,12 @@ function DashboardPage() {
             </span>
           </button>
         ))}
-        {loading && (
-          <div className="loading-card">
-            <LoaderCircle className="spin" size={22} />
-            正在同步岗位列表
-          </div>
-        )}
       </div>
 
       <StartSettingsModal
         role={selectedRole}
         open={Boolean(selectedRole)}
+        sectionState={selectedRole?.key ? sectionCache[selectedRole.key] : null}
         onClose={() => setSelectedRole(null)}
         onConfirm={handleStart}
       />
@@ -976,37 +1030,31 @@ function DashboardPage() {
   )
 }
 
-function StartSettingsModal({ role, open, onClose, onConfirm }) {
-  const toast = useToast()
+function StartSettingsModal({ role, open, sectionState, onClose, onConfirm }) {
   const [difficulty, setDifficulty] = useState('中等')
   const [rounds, setRounds] = useState(6)
-  const [sections, setSections] = useState([])
   const [selectedSections, setSelectedSections] = useState([])
-  const [loadingSections, setLoadingSections] = useState(false)
   const [repoSlots, setRepoSlots] = useState([{ url: '', analyzing: false, summary: null, error: '' }])
   const [repoExpanded, setRepoExpanded] = useState(false)
+  const sections = sectionState?.items || []
+  const loadingSections = Boolean(open && role?.key && (!sectionState || sectionState.status === 'loading'))
 
   useEffect(() => {
-    if (!open || !role?.key) return
+    if (!open || !role) return
     setDifficulty('中等')
     setRounds(6)
     setSelectedSections([])
     setRepoSlots([{ url: '', analyzing: false, summary: null, error: '' }])
     setRepoExpanded(false)
-    setLoadingSections(true)
-    api
-      .get(`/interview/roles/${role.key}/sections`)
-      .then(({ data }) => setSections(Array.isArray(data) ? data : []))
-      .catch(() => {
-        setSections([])
-        toast('知识点列表暂时不可用，将按完整流程面试。', 'warning')
-      })
-      .finally(() => setLoadingSections(false))
-  }, [open, role?.key, toast])
+  }, [open, role])
 
   const groupedSections = useMemo(() => groupInterviewSections(sections), [sections])
   const selectedRepoCount = repoSlots.filter((slot) => slot.url.trim() && !slot.error).length
-  const selectedSectionText = selectedSections.length ? `已选 ${selectedSections.length} 项` : '默认完整流程'
+  const selectedSectionText = loadingSections
+    ? '正在准备'
+    : selectedSections.length
+      ? `已选 ${selectedSections.length} 项`
+      : '默认完整流程'
   const roundText = `${rounds} 轮 · ${roundsTone(rounds)}`
   const roundProgress = `${Math.min(100, Math.max(0, ((Number(rounds) - 2) / 8) * 100))}%`
 
@@ -1109,8 +1157,21 @@ function StartSettingsModal({ role, open, onClose, onConfirm }) {
               <strong>{selectedSectionText}</strong>
             </div>
             {loadingSections ? (
-              <div className="muted-row">
-                <LoaderCircle className="spin" size={16} /> 正在读取知识点
+              <div className="section-groups is-loading" aria-busy="true" aria-label="正在读取知识点">
+                {SECTION_SKELETON_GROUPS.map((group) => (
+                  <div className="section-chip-group" key={group.label}>
+                    <span className="section-group-label skeleton-label">{group.label}</span>
+                    <div className="chip-list">
+                      {group.widths.map((width, index) => (
+                        <span
+                          className="chip skeleton-chip"
+                          key={`${group.label}-${index}`}
+                          style={{ '--skeleton-width': `${width}px` }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : groupedSections.length ? (
               <div className="section-groups">

@@ -6212,6 +6212,10 @@ strong {
   gap: 16px;
 }
 
+.section-groups.is-loading {
+  min-height: 184px;
+}
+
 .section-chip-group {
   display: grid;
   gap: 10px;
@@ -6221,6 +6225,10 @@ strong {
   color: #777873;
   font-size: 14px;
   font-weight: 400;
+}
+
+.section-group-label.skeleton-label {
+  color: #a5a49f;
 }
 
 .settings-modal .chip-list {
@@ -6249,6 +6257,27 @@ strong {
   border-color: #000;
   background: #000;
   color: #fffdf7;
+}
+
+.settings-modal .skeleton-chip {
+  width: var(--skeleton-width, 110px);
+  min-height: 42px;
+  border-color: rgba(0, 0, 0, 0.06);
+  background:
+    linear-gradient(90deg, transparent, rgba(255, 253, 247, 0.62), transparent),
+    #f0eee6;
+  background-size: 220% 100%, 100% 100%;
+  pointer-events: none;
+  animation: settingsSkeletonSweep 1.15s ease-in-out infinite;
+}
+
+@keyframes settingsSkeletonSweep {
+  from {
+    background-position: 120% 0, 0 0;
+  }
+  to {
+    background-position: -120% 0, 0 0;
+  }
 }
 
 .github-field {
