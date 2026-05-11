@@ -100,7 +100,9 @@ function isHistoryGenerating(item) {
 function isHistoryFailed(item) {
   return item?.status === 'evaluation_failed'
 }
-const BRAND_WORDS = ['Interview', 'Insight', 'Improve', 'Inspire', 'Iterate']
+const BRAND_WORDS = ['Interview', 'Improve', 'Insight', 'Iterate']
+const ECHO_WORD = 'Echo'
+let homeIntroHasPlayed = false
 
 const AuthContext = createContext(null)
 const ToastContext = createContext(null)
@@ -374,68 +376,168 @@ function estimateTitleWidth(text, count = text.length) {
     .reduce((sum, letter) => sum + (TITLE_CHAR_WIDTH[letter.toLowerCase()] ?? 0.5), 0)
 }
 
-function useSlidingBrandWord(words, options = {}) {
-  const stepDelay = options.stepDelay ?? 78
-  const expandDelay = options.expandDelay ?? stepDelay
-  const collapseDelay = options.collapseDelay ?? stepDelay
-  const holdDelay = options.holdDelay ?? 1280
-  const iconHoldDelay = options.iconHoldDelay ?? 320
+function titleStepDelay(seed, base) {
+  const offsets = [0, 14, -6, 10, 4, -4]
+  return Math.max(56, base + offsets[Math.abs(seed) % offsets.length])
+}
+
+function HomeIntroIcon() {
+  return (
+    <svg className="home-intro-icon" viewBox="10 8 44 48" aria-hidden="true">
+      <g fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
+        <path
+          className="home-intro-icon-path"
+          pathLength="1"
+          vectorEffect="non-scaling-stroke"
+          strokeWidth="4.1"
+          d="M18.4 13.2C23.7 11.7 40.3 11.7 45.6 13.2C47.5 13.8 48 16 46.3 17.3C41.7 20.8 36.2 26 32 32C36.2 38 41.7 43.2 46.3 46.7C48 48 47.5 50.2 45.6 50.8C40.3 52.3 23.7 52.3 18.4 50.8C16.5 50.2 16 48 17.7 46.7C22.3 43.2 27.8 38 32 32C27.8 26 22.3 20.8 17.7 17.3C16 16 16.5 13.8 18.4 13.2Z"
+        />
+      </g>
+    </svg>
+  )
+}
+
+function useHomeIntroTitle(words, playIntro, onIntroComplete) {
   const [wordIndex, setWordIndex] = useState(0)
   const currentWord = words[wordIndex % words.length] || 'Interview'
-  const suffix = currentWord.startsWith('I') ? currentWord.slice(1) : currentWord
-  const [visibleCount, setVisibleCount] = useState(suffix.length)
-  const [phase, setPhase] = useState('hold')
+  const prefix = currentWord.startsWith('I') ? currentWord.slice(1) : currentWord
+  const [phase, setPhase] = useState(playIntro ? 'drawIcon' : 'cyclePrefixWords')
+  const [cycleMode, setCycleMode] = useState(playIntro ? 'intro' : 'hold')
+  const [echoCount, setEchoCount] = useState(playIntro ? 0 : ECHO_WORD.length)
+  const [prefixCount, setPrefixCount] = useState(playIntro ? 0 : prefix.length)
+  const completedRef = useRef(!playIntro)
+
+  const completeIntro = useCallback(() => {
+    if (completedRef.current) return
+    completedRef.current = true
+    homeIntroHasPlayed = true
+    onIntroComplete?.()
+  }, [onIntroComplete])
 
   useEffect(() => {
     let timeout
-    if (phase === 'hold') {
-      timeout = window.setTimeout(() => setPhase('collapse'), holdDelay)
-    } else if (phase === 'collapse') {
-      if (visibleCount > 0) {
-        timeout = window.setTimeout(() => {
-          setVisibleCount((value) => Math.max(0, value - 1))
-        }, collapseDelay)
-      } else {
-        timeout = window.setTimeout(() => setPhase('icon'), iconHoldDelay)
-      }
-    } else if (phase === 'icon') {
-      timeout = window.setTimeout(() => {
-        setWordIndex((index) => (index + 1) % words.length)
-        setVisibleCount(0)
-        setPhase('expand')
-      }, iconHoldDelay)
-    } else if (phase === 'expand') {
-      if (visibleCount < suffix.length) {
+
+    if (phase === 'drawIcon') {
+      timeout = window.setTimeout(() => setPhase('iconPulse'), 760)
+    } else if (phase === 'iconPulse') {
+      timeout = window.setTimeout(() => setPhase('typeEcho'), 260)
+    } else if (phase === 'typeEcho') {
+      if (echoCount < ECHO_WORD.length) {
         timeout = window.setTimeout(
-          () => setVisibleCount((value) => Math.min(suffix.length, value + 1)),
-          expandDelay,
+          () => setEchoCount((value) => Math.min(ECHO_WORD.length, value + 1)),
+          titleStepDelay(echoCount, 100),
         )
       } else {
-        timeout = window.setTimeout(() => setPhase('hold'), 260)
+        timeout = window.setTimeout(() => setPhase('typePrefix'), 180)
+      }
+    } else if (phase === 'typePrefix') {
+      if (prefixCount < prefix.length) {
+        timeout = window.setTimeout(
+          () => setPrefixCount((value) => Math.min(prefix.length, value + 1)),
+          titleStepDelay(prefixCount, 86),
+        )
+      } else {
+        timeout = window.setTimeout(() => {
+          completeIntro()
+          setCycleMode('hold')
+          setPhase('cyclePrefixWords')
+        }, 620)
+      }
+    } else if (phase === 'cyclePrefixWords') {
+      if (cycleMode === 'hold') {
+        timeout = window.setTimeout(() => setCycleMode('delete'), 1500)
+      } else if (cycleMode === 'delete') {
+        if (prefixCount > 0) {
+          timeout = window.setTimeout(
+            () => setPrefixCount((value) => Math.max(0, value - 1)),
+            titleStepDelay(prefixCount, 68),
+          )
+        } else {
+          timeout = window.setTimeout(() => {
+            setWordIndex((value) => (value + 1) % words.length)
+            setCycleMode('type')
+          }, 180)
+        }
+      } else if (cycleMode === 'type') {
+        if (prefixCount < prefix.length) {
+          timeout = window.setTimeout(
+            () => setPrefixCount((value) => Math.min(prefix.length, value + 1)),
+            titleStepDelay(prefixCount, 84),
+          )
+        } else {
+          timeout = window.setTimeout(() => setCycleMode('hold'), 460)
+        }
       }
     }
 
     return () => window.clearTimeout(timeout)
-  }, [
-    collapseDelay,
-    expandDelay,
-    holdDelay,
-    iconHoldDelay,
-    phase,
-    suffix.length,
-    visibleCount,
-    words.length,
-  ])
+  }, [completeIntro, cycleMode, echoCount, phase, prefix.length, prefixCount, words.length])
 
   return {
-    word: currentWord,
-    suffix,
-    letters: Array.from(suffix),
-    visibleCount,
-    visibleWidthEm: estimateTitleWidth(suffix, visibleCount),
-    suffixWidthEm: estimateTitleWidth(suffix),
+    currentWord,
+    prefix,
+    prefixLetters: Array.from(prefix),
+    prefixCount,
+    prefixWidthEm: estimateTitleWidth(prefix, prefixCount) + prefixCount * 0.055,
+    echoLetters: Array.from(ECHO_WORD),
+    echoCount,
     phase,
+    cycleMode,
+    playIntro,
   }
+}
+
+function HomeIntroTitle({ onIntroComplete }) {
+  const [playIntro] = useState(() => !homeIntroHasPlayed)
+  const title = useHomeIntroTitle(BRAND_WORDS, playIntro, onIntroComplete)
+
+  return (
+    <h1
+      className="hero-title workbench-title home-intro-title"
+      data-phase={title.phase}
+      data-cycle-mode={title.cycleMode}
+      data-intro={title.playIntro ? 'true' : 'false'}
+      aria-label={`${title.currentWord}${ECHO_WORD} 面试练习工作台`}
+    >
+      <span
+        className="home-intro-line"
+        style={{ '--prefix-width-em': `${title.prefixWidthEm}em` }}
+        aria-hidden="true"
+      >
+        <span className="home-intro-icon-wrap">
+          <HomeIntroIcon />
+        </span>
+        <span className="home-prefix-window">
+          <span className="home-prefix-word">
+            {title.prefixLetters.map((letter, index) => {
+              const isVisible = index < title.prefixCount
+              const letterWidth = (TITLE_CHAR_WIDTH[letter.toLowerCase()] ?? 0.5) + 0.055
+              return (
+                <span
+                  className={`home-title-letter ${isVisible ? 'is-visible' : ''}`}
+                  key={`${title.currentWord}-${letter}-${index}`}
+                  style={{ '--letter-em': `${letterWidth}em`, '--letter-index': index }}
+                >
+                  {letter}
+                </span>
+              )
+            })}
+          </span>
+        </span>
+        <span className="home-echo-word">
+          {title.echoLetters.map((letter, index) => (
+            <span
+              className={`home-echo-letter ${index < title.echoCount ? 'is-visible' : ''}`}
+              key={`${letter}-${index}`}
+              style={{ '--letter-index': index }}
+            >
+              {letter}
+            </span>
+          ))}
+        </span>
+      </span>
+    </h1>
+  )
 }
 
 function HomePage() {
@@ -443,8 +545,9 @@ function HomePage() {
   const navigate = useNavigate()
   const [history, setHistory] = useState([])
   const [historyLoading, setHistoryLoading] = useState(false)
-  const brandTitle = useSlidingBrandWord(BRAND_WORDS)
+  const [introComplete, setIntroComplete] = useState(() => homeIntroHasPlayed)
   const homeScrollRef = useRef(null)
+  const handleIntroComplete = useCallback(() => setIntroComplete(true), [])
 
   useEffect(() => {
     if (!auth.isAuthenticated) {
@@ -515,57 +618,26 @@ function HomePage() {
 
   return (
     <div className="page enter-page home-page" ref={homeScrollRef}>
-      <section className="home-snap-section home-landing">
-        <div>
-          <h1 className="hero-title workbench-title" aria-label={`${brandTitle.word}Echo 面试练习工作台`}>
-            <span
-              className="hero-brand-line"
-              data-phase={brandTitle.phase}
-              style={{
-                '--suffix-ch': brandTitle.suffix.length,
-                '--shown-ch': brandTitle.visibleCount,
-                '--shown-em': `${brandTitle.visibleWidthEm}em`,
-                '--suffix-em': `${brandTitle.suffixWidthEm}em`,
-              }}
-              aria-hidden="true"
-            >
-              <span className="title-i-mark">
-                <BrandIcon />
-              </span>
-              <span className="brand-suffix-window">
-                <span className="brand-suffix-word">
-                  {brandTitle.letters.map((letter, index) => {
-                    const isVisible = index < brandTitle.visibleCount
-                    const letterWidth = (TITLE_CHAR_WIDTH[letter.toLowerCase()] ?? 0.5) + 0.06
-                    return (
-                      <span
-                        className={`brand-letter ${isVisible ? 'is-visible' : ''}`}
-                        key={`${brandTitle.word}-${letter}-${index}`}
-                        style={{ '--letter-em': `${letterWidth}em` }}
-                      >
-                        {letter}
-                      </span>
-                    )
-                  })}
-                </span>
-              </span>
-              <span className="hero-echo">Echo</span>
-            </span>
-          </h1>
-          <p className="home-landing-slogan">拥抱AI，拥抱未来</p>
+      <section className={`home-snap-section home-landing ${introComplete ? 'intro-complete' : 'intro-running'}`}>
+        <div className="home-title-stage">
+          <HomeIntroTitle onIntroComplete={handleIntroComplete} />
         </div>
 
-        <div className="home-action-panel">
-          <button className="button primary" onClick={() => navigate(auth.isAuthenticated ? '/dashboard' : '/login')}>
-            <Play size={17} />
-            {auth.isAuthenticated ? '开始一场面试' : '登录 / 注册'}
-          </button>
-          {auth.isAuthenticated && (
-            <button className="button ghost" onClick={() => navigate('/profile')}>
-              <History size={17} />
-              查看全部记录
+        <div className="home-landing-reveal" aria-hidden={!introComplete}>
+          <p className="home-landing-slogan">拥抱AI，拥抱未来</p>
+
+          <div className="home-action-panel">
+            <button className="button primary" onClick={() => navigate(auth.isAuthenticated ? '/dashboard' : '/login')}>
+              <Play size={17} />
+              {auth.isAuthenticated ? '开始一场面试' : '登录 / 注册'}
             </button>
-          )}
+            {auth.isAuthenticated && (
+              <button className="button ghost" onClick={() => navigate('/profile')}>
+                <History size={17} />
+                查看全部记录
+              </button>
+            )}
+          </div>
         </div>
       </section>
 
