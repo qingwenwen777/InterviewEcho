@@ -419,7 +419,7 @@ function useHomeIntroTitle(words, playIntro, onIntroComplete) {
     if (phase === 'drawIcon') {
       timeout = window.setTimeout(() => setPhase('iconPulse'), 760)
     } else if (phase === 'iconPulse') {
-      timeout = window.setTimeout(() => setPhase('typeEcho'), 260)
+      timeout = window.setTimeout(() => setPhase('typeEcho'), 720)
     } else if (phase === 'typeEcho') {
       if (echoCount < ECHO_WORD.length) {
         timeout = window.setTimeout(
