@@ -6013,3 +6013,367 @@ strong {
     padding-bottom: 7mm !important;
   }
 }
+
+/* Final settings modal layout pass. Kept at the end so legacy modal rules cannot override it. */
+.settings-modal {
+  width: min(1080px, calc(100vw - 56px));
+  height: auto;
+  max-height: calc(100dvh - 48px);
+  border-color: rgba(0, 0, 0, 0.1);
+  border-radius: 20px;
+  background: rgba(255, 253, 247, 0.98);
+  box-shadow: 0 28px 72px -52px rgba(0, 0, 0, 0.6);
+}
+
+.settings-modal .modal-head {
+  align-items: flex-start;
+  padding: 34px 44px 20px;
+  border-bottom: 0;
+}
+
+.settings-modal .modal-kicker {
+  color: #5f605d;
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.settings-modal .modal-head h2 {
+  margin: 12px 0 0;
+  color: #080808;
+  font-family: var(--sans);
+  font-size: clamp(24px, 2.6vw, 31px);
+  font-weight: 650;
+  letter-spacing: 0;
+  line-height: 1.22;
+}
+
+.settings-modal .icon-button {
+  width: 42px;
+  height: 42px;
+  border-color: transparent;
+  background: transparent;
+  color: #080808;
+}
+
+.settings-modal .icon-button:hover {
+  background: #f0eee6;
+}
+
+.settings-modal .settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  padding: 18px 44px 28px;
+  overflow-y: auto;
+}
+
+.settings-config-row {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.95fr) minmax(360px, 1.05fr);
+  gap: 38px;
+  align-items: start;
+}
+
+.settings-field {
+  min-width: 0;
+}
+
+.settings-field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 13px;
+  color: #171716;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.settings-field-head strong {
+  color: #4f504c;
+  font-size: 15px;
+  font-weight: 400;
+}
+
+.settings-modal .settings-difficulty {
+  gap: 0;
+  padding: 4px;
+  border-radius: 12px;
+  background: #f0eee6;
+}
+
+.settings-modal .settings-difficulty button {
+  min-height: 48px;
+  border-color: transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: #171716;
+  font-size: 16px;
+  font-weight: 520;
+  transform: none;
+}
+
+.settings-modal .settings-difficulty button:hover {
+  transform: none;
+}
+
+.settings-modal .settings-difficulty button.active {
+  border-color: rgba(0, 0, 0, 0.18);
+  background: rgba(255, 253, 247, 0.96);
+  color: #000;
+  box-shadow: 0 8px 22px -20px rgba(0, 0, 0, 0.55);
+}
+
+.settings-modal .range {
+  height: 34px;
+  accent-color: #000;
+}
+
+.settings-modal .range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: #dedcd5;
+}
+
+.settings-modal .range::-webkit-slider-thumb {
+  width: 22px;
+  height: 22px;
+  margin-top: -9px;
+  border: 1px solid rgba(0, 0, 0, 0.22);
+  background: #fffdf7;
+}
+
+.settings-modal .range-labels {
+  margin-top: 2px;
+  color: #858681;
+  font-size: 13px;
+}
+
+.settings-section-field {
+  padding-top: 6px;
+}
+
+.section-groups {
+  display: grid;
+  gap: 16px;
+}
+
+.section-chip-group {
+  display: grid;
+  gap: 10px;
+}
+
+.section-group-label {
+  color: #777873;
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.settings-modal .chip-list {
+  gap: 10px;
+}
+
+.settings-modal .chip {
+  min-height: 42px;
+  padding: 9px 18px;
+  border-color: rgba(0, 0, 0, 0.22);
+  border-radius: 999px;
+  background: transparent;
+  color: #20201e;
+  font-size: 15px;
+  font-weight: 450;
+  transform: none;
+}
+
+.settings-modal .chip:hover {
+  border-color: rgba(0, 0, 0, 0.36);
+  background: rgba(255, 255, 255, 0.5);
+  transform: none;
+}
+
+.settings-modal .chip.active {
+  border-color: #000;
+  background: #000;
+  color: #fffdf7;
+}
+
+.github-field {
+  padding: 24px 0;
+  border-top: 1px solid rgba(0, 0, 0, 0.11);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.11);
+}
+
+.github-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #171716;
+  font: inherit;
+  text-align: left;
+}
+
+.github-toggle-title,
+.github-toggle-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.github-toggle-title {
+  min-width: 0;
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.github-toggle-title svg {
+  flex: 0 0 auto;
+}
+
+.github-toggle-title em {
+  color: #777873;
+  font-style: normal;
+  font-weight: 400;
+}
+
+.github-toggle-meta {
+  flex: 0 0 auto;
+  color: #777873;
+  font-size: 14px;
+}
+
+.github-toggle-meta svg {
+  transition: transform 0.18s ease;
+}
+
+.github-field.expanded .github-toggle-meta svg {
+  transform: rotate(180deg);
+}
+
+.github-repo-panel {
+  margin-top: 20px;
+}
+
+.settings-modal .repo-list {
+  gap: 12px;
+}
+
+.settings-modal .repo-slot {
+  gap: 9px;
+}
+
+.settings-modal .repo-input-line {
+  min-height: 54px;
+  padding: 7px 9px 7px 16px;
+  border-color: rgba(0, 0, 0, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.46);
+}
+
+.settings-modal .repo-input-line input {
+  min-height: 36px;
+  color: #171716;
+  font-size: 15px;
+}
+
+.settings-modal .repo-input-line .button {
+  min-height: 38px;
+  padding-inline: 15px;
+  border-radius: 999px;
+}
+
+.settings-modal .repo-summary {
+  padding: 12px 16px;
+  border-color: rgba(0, 0, 0, 0.1);
+  border-radius: 16px;
+  background: #f0eee6;
+}
+
+.settings-modal .add-repo {
+  min-height: 42px;
+  border-color: rgba(0, 0, 0, 0.14);
+  border-radius: 999px;
+  background: transparent;
+  color: #171716;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.settings-modal .settings-actions {
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 22px 44px 34px;
+  border-top: 0;
+  background: transparent;
+}
+
+.settings-modal .settings-actions .button {
+  min-height: 54px;
+  padding-inline: 26px;
+  font-size: 16px;
+  font-weight: 520;
+}
+
+.settings-modal .settings-actions .button.ghost {
+  min-width: 110px;
+  border-color: rgba(0, 0, 0, 0.16);
+  background: transparent;
+  color: #171716;
+}
+
+.settings-modal .settings-actions .button.primary {
+  min-width: 220px;
+  background: #000;
+  color: #fffdf7;
+}
+
+.settings-modal .settings-actions .button.grow {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 760px) {
+  .settings-modal {
+    width: calc(100vw - 28px);
+    max-height: calc(100dvh - 28px);
+    border-radius: 18px;
+  }
+
+  .settings-modal .modal-head,
+  .settings-modal .settings-body,
+  .settings-modal .settings-actions {
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+
+  .settings-modal .modal-head h2 {
+    font-size: 23px;
+  }
+
+  .settings-config-row {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+
+  .settings-field-head,
+  .github-toggle {
+    align-items: flex-start;
+  }
+
+  .github-toggle {
+    flex-direction: column;
+  }
+
+  .settings-modal .settings-actions {
+    flex-direction: column-reverse;
+  }
+
+  .settings-modal .settings-actions .button {
+    width: 100%;
+  }
+}

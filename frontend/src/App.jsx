@@ -100,6 +100,34 @@ function isHistoryGenerating(item) {
 function isHistoryFailed(item) {
   return item?.status === 'evaluation_failed'
 }
+
+function sectionGroupLabel(section) {
+  if (/沟通|协作|冲突|应急|管理|排期|表达|复盘|软/.test(section)) return '软技能'
+  if (/工程|工具|架构|落地|调优|优化|性能|安全|项目|实践|部署|测试|链|排查/.test(section)) return '工程能力'
+  return '基础技术'
+}
+
+function groupInterviewSections(sections) {
+  const groups = [
+    { label: '基础技术', items: [] },
+    { label: '工程能力', items: [] },
+    { label: '软技能', items: [] },
+  ]
+
+  sections.forEach((section) => {
+    const group = groups.find((item) => item.label === sectionGroupLabel(section)) || groups[0]
+    group.items.push(section)
+  })
+
+  return groups.filter((group) => group.items.length)
+}
+
+function roundsTone(rounds) {
+  const value = Number(rounds)
+  if (value <= 4) return '短'
+  if (value >= 8) return '深'
+  return '标准'
+}
 const BRAND_WORDS = ['Interview', 'Improve', 'Insight', 'Iterate']
 const ECHO_WORD = 'Echo'
 let homeIntroHasPlayed = false
@@ -957,6 +985,7 @@ function StartSettingsModal({ role, open, onClose, onConfirm }) {
   const [selectedSections, setSelectedSections] = useState([])
   const [loadingSections, setLoadingSections] = useState(false)
   const [repoSlots, setRepoSlots] = useState([{ url: '', analyzing: false, summary: null, error: '' }])
+  const [repoExpanded, setRepoExpanded] = useState(false)
 
   useEffect(() => {
     if (!open || !role?.key) return
@@ -964,6 +993,7 @@ function StartSettingsModal({ role, open, onClose, onConfirm }) {
     setRounds(6)
     setSelectedSections([])
     setRepoSlots([{ url: '', analyzing: false, summary: null, error: '' }])
+    setRepoExpanded(false)
     setLoadingSections(true)
     api
       .get(`/interview/roles/${role.key}/sections`)
@@ -974,6 +1004,11 @@ function StartSettingsModal({ role, open, onClose, onConfirm }) {
       })
       .finally(() => setLoadingSections(false))
   }, [open, role?.key, toast])
+
+  const groupedSections = useMemo(() => groupInterviewSections(sections), [sections])
+  const selectedRepoCount = repoSlots.filter((slot) => slot.url.trim() && !slot.error).length
+  const selectedSectionText = selectedSections.length ? `已选 ${selectedSections.length} 项` : '默认完整流程'
+  const roundText = `${rounds} 轮 · ${roundsTone(rounds)}`
 
   if (!open || !role) return null
 
@@ -1020,120 +1055,159 @@ function StartSettingsModal({ role, open, onClose, onConfirm }) {
         <div className="modal-head">
           <div>
             <span className="modal-kicker">面试设置</span>
-            <h2>开始 {role.name} 面试</h2>
+            <h2>{role.name} · 模拟面试</h2>
           </div>
           <button className="icon-button" onClick={onClose} title="关闭">
             <X size={18} />
           </button>
         </div>
 
-        <div className="modal-body">
-          <FieldGroup label="难度">
-            <div className="segmented three">
-              {DIFFICULTIES.map((item) => (
-                <button
-                  key={item}
-                  className={difficulty === item ? 'active' : ''}
-                  onClick={() => setDifficulty(item)}
-                >
-                  {item}
-                </button>
-              ))}
-            </div>
-          </FieldGroup>
+        <div className="modal-body settings-body">
+          <div className="settings-config-row">
+            <section className="settings-field">
+              <div className="settings-field-head">
+                <span>难度</span>
+              </div>
+              <div className="segmented three settings-difficulty">
+                {DIFFICULTIES.map((item) => (
+                  <button
+                    key={item}
+                    className={difficulty === item ? 'active' : ''}
+                    onClick={() => setDifficulty(item)}
+                  >
+                    {item}
+                  </button>
+                ))}
+              </div>
+            </section>
 
-          <FieldGroup label={`轮次：${rounds}`}>
-            <input
-              className="range"
-              type="range"
-              min="2"
-              max="10"
-              value={rounds}
-              onChange={(event) => setRounds(event.target.value)}
-            />
-            <div className="range-labels">
-              <span>短</span>
-              <span>标准</span>
-              <span>深</span>
-            </div>
-          </FieldGroup>
+            <section className="settings-field">
+              <div className="settings-field-head">
+                <span>轮次</span>
+                <strong>{roundText}</strong>
+              </div>
+              <input
+                className="range"
+                type="range"
+                min="2"
+                max="10"
+                value={rounds}
+                onChange={(event) => setRounds(event.target.value)}
+              />
+              <div className="range-labels">
+                <span>短</span>
+                <span>标准</span>
+                <span>深</span>
+              </div>
+            </section>
+          </div>
 
-          <FieldGroup label="考察领域">
+          <section className="settings-field settings-section-field">
+            <div className="settings-field-head">
+              <span>考察领域</span>
+              <strong>{selectedSectionText}</strong>
+            </div>
             {loadingSections ? (
               <div className="muted-row">
                 <LoaderCircle className="spin" size={16} /> 正在读取知识点
               </div>
-            ) : sections.length ? (
-              <div className="chip-list">
-                {sections.map((section) => (
-                  <button
-                    className={`chip ${selectedSections.includes(section) ? 'active' : ''}`}
-                    key={section}
-                    onClick={() => toggleSection(section)}
-                  >
-                    {section}
-                  </button>
+            ) : groupedSections.length ? (
+              <div className="section-groups">
+                {groupedSections.map((group) => (
+                  <div className="section-chip-group" key={group.label}>
+                    <span className="section-group-label">{group.label}</span>
+                    <div className="chip-list">
+                      {group.items.map((section) => (
+                        <button
+                          className={`chip ${selectedSections.includes(section) ? 'active' : ''}`}
+                          key={section}
+                          onClick={() => toggleSection(section)}
+                        >
+                          {section}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
             ) : (
               <div className="muted-row">暂无可选知识点，默认走完整流程。</div>
             )}
-          </FieldGroup>
+          </section>
 
-          <FieldGroup label="GitHub 项目深挖">
-            <div className="repo-list">
-              {repoSlots.map((slot, index) => (
-                <div className="repo-slot" key={index}>
-                  <div className="repo-input-line">
-                    <Github size={16} />
-                    <input
-                      value={slot.url}
-                      disabled={slot.analyzing || Boolean(slot.summary)}
-                      placeholder="https://github.com/owner/repo"
-                      onChange={(event) => updateRepoSlot(index, { url: event.target.value, error: '', summary: null })}
-                    />
-                    {slot.summary ? (
-                      <button className="button ghost small" onClick={() => updateRepoSlot(index, { url: '', summary: null })}>
-                        移除
-                      </button>
-                    ) : (
-                      <button
-                        className="button ghost small"
-                        disabled={!slot.url.trim() || slot.analyzing}
-                        onClick={() => analyzeRepo(index)}
-                      >
-                        {slot.analyzing ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}
-                        分析
-                      </button>
-                    )}
-                  </div>
-                  {slot.summary && (
-                    <div className="repo-summary">
-                      <b>{slot.summary.full_name}</b>
-                      <span>{slot.summary.main_language || '未知语言'} · 星标 {slot.summary.stars || 0}</span>
-                      <p>{slot.summary.description || '无描述'}</p>
+          <section className={`settings-field github-field ${repoExpanded ? 'expanded' : ''}`}>
+            <button
+              className="github-toggle"
+              type="button"
+              aria-expanded={repoExpanded}
+              onClick={() => setRepoExpanded((value) => !value)}
+            >
+              <span className="github-toggle-title">
+                <Github size={19} />
+                <span>关联 GitHub 项目深挖</span>
+                <em>（可选）</em>
+              </span>
+              <span className="github-toggle-meta">
+                {selectedRepoCount ? `已添加 ${selectedRepoCount} 个` : '展开添加'}
+                <ChevronDown size={18} />
+              </span>
+            </button>
+
+            {repoExpanded && (
+              <div className="repo-list github-repo-panel">
+                {repoSlots.map((slot, index) => (
+                  <div className="repo-slot" key={index}>
+                    <div className="repo-input-line">
+                      <Github size={16} />
+                      <input
+                        value={slot.url}
+                        disabled={slot.analyzing || Boolean(slot.summary)}
+                        placeholder="https://github.com/owner/repo"
+                        onChange={(event) => updateRepoSlot(index, { url: event.target.value, error: '', summary: null })}
+                      />
+                      {slot.summary ? (
+                        <button className="button ghost small" onClick={() => updateRepoSlot(index, { url: '', summary: null })}>
+                          移除
+                        </button>
+                      ) : (
+                        <button
+                          className="button ghost small"
+                          disabled={!slot.url.trim() || slot.analyzing}
+                          onClick={() => analyzeRepo(index)}
+                        >
+                          {slot.analyzing ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}
+                          分析
+                        </button>
+                      )}
                     </div>
-                  )}
-                  {slot.error && <div className="inline-error">{slot.error}</div>}
-                </div>
-              ))}
-              {repoSlots.length < 3 && (
-                <button
-                  className="add-repo"
-                  onClick={() => setRepoSlots((current) => [...current, { url: '', analyzing: false, summary: null, error: '' }])}
-                >
-                  <Plus size={15} /> 添加仓库
-                </button>
-              )}
-            </div>
-          </FieldGroup>
+                    {slot.summary && (
+                      <div className="repo-summary">
+                        <b>{slot.summary.full_name}</b>
+                        <span>{slot.summary.main_language || '未知语言'} · 星标 {slot.summary.stars || 0}</span>
+                        <p>{slot.summary.description || '无描述'}</p>
+                      </div>
+                    )}
+                    {slot.error && <div className="inline-error">{slot.error}</div>}
+                  </div>
+                ))}
+                {repoSlots.length < 3 && (
+                  <button
+                    className="add-repo"
+                    onClick={() => setRepoSlots((current) => [...current, { url: '', analyzing: false, summary: null, error: '' }])}
+                  >
+                    <Plus size={15} /> 添加仓库
+                  </button>
+                )}
+              </div>
+            )}
+          </section>
         </div>
 
-        <div className="modal-actions">
+        <div className="modal-actions settings-actions">
           <button className="button ghost" onClick={onClose}>
             取消
           </button>
-          <button className="button primary grow" onClick={submit}>
+          <button className="button primary" onClick={submit}>
             <Play size={16} />
             进入面试房间
           </button>
