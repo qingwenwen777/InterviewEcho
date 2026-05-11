@@ -609,6 +609,12 @@ h6 {
   font-weight: 800;
 }
 
+.inline-link:disabled,
+.inline-link.pending {
+  color: #8b8b84;
+  cursor: default;
+}
+
 .hero-panel {
   position: relative;
   display: grid;
@@ -918,6 +924,15 @@ h6 {
 .recent-report-row:hover {
   opacity: 0.7;
   transform: translateY(-1px);
+}
+
+.recent-report-row:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.recent-report-row:disabled:hover {
+  transform: none;
 }
 
 .row-main {
@@ -4859,6 +4874,25 @@ strong {
 .profile-page .inline-link {
   color: #000;
   font-weight: 500;
+}
+
+.profile-page .inline-link:disabled,
+.profile-page .inline-link.pending {
+  color: #8b8b84;
+}
+
+.profile-page .history-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  color: #75756f;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.profile-page .history-status.error {
+  color: #a8463f;
 }
 
 .report-snap-overview {

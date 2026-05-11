@@ -69,8 +69,9 @@ class MessageResponse(BaseModel):
 class EvaluationSummary(BaseModel):
     id: int
     role: str
-    difficulty: str
-    total_score: float
+    difficulty: Optional[str] = None
+    total_score: Optional[float] = None
+    status: str = "completed"
     created_at: datetime
     class Config:
         from_attributes = True

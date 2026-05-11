@@ -7,6 +7,7 @@ from services.audio_analysis import analyze_audio
 from services.repo_analyzer import analyze_repo
 from core.llm_service import generate_llm_response, evaluate_full_interview, polish_text, generate_repo_questions, generate_study_plan
 from sqlalchemy.orm import Session
+from sqlalchemy import or_, func
 from typing import List
 import json
 import os
@@ -708,20 +709,31 @@ async def _run_evaluation_job(interview_id: int):
 
 @router.get("/history", response_model=List[schemas.EvaluationSummary])
 def get_interview_history(db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
-    # Fetch completed interviews for the specific user
-    results = db.query(models.Evaluation).join(models.Interview).filter(
-        models.Interview.user_id == user_id,
-        models.Interview.status == "completed"
-    ).order_by(models.Evaluation.created_at.desc()).all()
+    # Include completed evaluations and interviews whose report job is still running.
+    results = (
+        db.query(models.Interview, models.Evaluation)
+        .outerjoin(models.Evaluation, models.Evaluation.interview_id == models.Interview.id)
+        .filter(
+            models.Interview.user_id == user_id,
+            or_(
+                models.Evaluation.id.isnot(None),
+                models.Interview.status.in_(["evaluating", "evaluation_failed"]),
+            ),
+        )
+        .order_by(func.coalesce(models.Evaluation.created_at, models.Interview.end_time, models.Interview.start_time).desc())
+        .all()
+    )
 
     return [
         schemas.EvaluationSummary(
-            id=e.interview_id,
-            role=e.interview.role,
-            difficulty=e.interview.difficulty,
-            total_score=e.total_score,
-            created_at=e.created_at
-        ) for e in results
+            id=interview.id,
+            role=interview.role,
+            difficulty=interview.difficulty,
+            total_score=evaluation.total_score if evaluation else None,
+            status="completed" if evaluation else (interview.status or "in_progress"),
+            created_at=evaluation.created_at if evaluation else (interview.end_time or interview.start_time),
+        )
+        for interview, evaluation in results
     ]
 
 

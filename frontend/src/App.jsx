@@ -88,6 +88,18 @@ function evaluationStatusText(status) {
   if (status === 'completed') return '评估报告已生成，正在加载。'
   return '正在检查评估报告状态。'
 }
+
+function isHistoryCompleted(item) {
+  return !item?.status || item.status === 'completed'
+}
+
+function isHistoryGenerating(item) {
+  return item?.status === 'evaluating'
+}
+
+function isHistoryFailed(item) {
+  return item?.status === 'evaluation_failed'
+}
 const BRAND_WORDS = ['Interview', 'Insight', 'Improve', 'Inspire', 'Iterate']
 
 const AuthContext = createContext(null)
@@ -459,9 +471,23 @@ function HomePage() {
     }
   }, [auth.isAuthenticated])
 
+  useEffect(() => {
+    if (!auth.isAuthenticated || !history.some(isHistoryGenerating)) return undefined
+
+    const timerId = window.setInterval(() => {
+      api
+        .get('/interview/history')
+        .then(({ data }) => setHistory(Array.isArray(data) ? data : []))
+        .catch(() => {})
+    }, EVALUATION_POLL_INTERVAL_MS)
+
+    return () => window.clearInterval(timerId)
+  }, [auth.isAuthenticated, history])
+
   const latest = history[0]
-  const averageScore = history.length
-    ? (history.reduce((sum, item) => sum + Number(item.total_score || 0), 0) / history.length).toFixed(1)
+  const completedHistory = history.filter(isHistoryCompleted)
+  const averageScore = completedHistory.length
+    ? (completedHistory.reduce((sum, item) => sum + Number(item.total_score || 0), 0) / completedHistory.length).toFixed(1)
     : '暂无'
   const recentRoles = Array.from(new Set(history.map((item) => item.role))).slice(0, 3)
 
@@ -556,16 +582,28 @@ function HomePage() {
             latest ? (
               <div className="latest-report-card">
                 <div className="latest-score">
-                  <span>最近得分</span>
-                  <b>{Number(latest.total_score || 0).toFixed(1)}</b>
+                  <span>{isHistoryCompleted(latest) ? '最近得分' : '报告状态'}</span>
+                  <b>
+                    {isHistoryCompleted(latest)
+                      ? Number(latest.total_score || 0).toFixed(1)
+                      : isHistoryFailed(latest)
+                        ? '失败'
+                        : '生成中'}
+                  </b>
                 </div>
                 <div className="latest-copy">
                   <h3>{latest.role}</h3>
                   <p>{formatDateTime(latest.created_at)} · {latest.difficulty || '中等'}</p>
                   <div className="latest-actions">
-                    <button className="button primary small" onClick={() => navigate(`/report/${latest.id}`)}>
-                      看报告
-                    </button>
+                    {isHistoryCompleted(latest) ? (
+                      <button className="button primary small" onClick={() => navigate(`/report/${latest.id}`)}>
+                        看报告
+                      </button>
+                    ) : (
+                      <button className="button primary small" disabled>
+                        {isHistoryFailed(latest) ? '生成失败' : '生成中'}
+                      </button>
+                    )}
                     <button className="button ghost small" onClick={() => navigate('/dashboard')}>
                       再练一次
                     </button>
@@ -596,16 +634,26 @@ function HomePage() {
           {auth.isAuthenticated && historyLoading && <EmptyState text="正在读取历史记录" loading compact />}
           {auth.isAuthenticated && !historyLoading && history.length > 0 && (
             <div className="recent-report-list">
-              {history.slice(0, 4).map((item) => (
-                <button className="recent-report-row" key={item.id} onClick={() => navigate(`/report/${item.id}`)}>
-                  <span className="row-main">
-                    <b>{item.role}</b>
-                    <small>{formatDateTime(item.created_at)}</small>
-                  </span>
-                  <span className={`difficulty ${difficultyTone(item.difficulty)}`}>{item.difficulty || '中等'}</span>
-                  <span className="row-score">{Number(item.total_score || 0).toFixed(1)}</span>
-                </button>
-              ))}
+              {history.slice(0, 4).map((item) => {
+                const completed = isHistoryCompleted(item)
+                return (
+                  <button
+                    className="recent-report-row"
+                    key={item.id}
+                    disabled={!completed}
+                    onClick={() => completed && navigate(`/report/${item.id}`)}
+                  >
+                    <span className="row-main">
+                      <b>{item.role}</b>
+                      <small>{formatDateTime(item.created_at)}</small>
+                    </span>
+                    <span className={`difficulty ${difficultyTone(item.difficulty)}`}>{item.difficulty || '中等'}</span>
+                    <span className="row-score">
+                      {isHistoryGenerating(item) ? '生成中' : isHistoryFailed(item) ? '失败' : Number(item.total_score || 0).toFixed(1)}
+                    </span>
+                  </button>
+                )
+              })}
             </div>
           )}
           {auth.isAuthenticated && !historyLoading && history.length === 0 && <EmptyState text="暂无历史记录" compact />}
@@ -615,7 +663,7 @@ function HomePage() {
 
       {auth.isAuthenticated && (
         <div className="home-facts">
-          <MetricPill label="已完成面试" value={String(history.length)} />
+          <MetricPill label="已完成面试" value={String(completedHistory.length)} />
           <MetricPill label="平均分" value={averageScore} />
           <MetricPill label="常练岗位" value={recentRoles.length ? String(recentRoles.length) : '0'} />
         </div>
@@ -1052,13 +1100,17 @@ function InterviewRoom() {
     if (!interviewId || ending) return
     setEnding(true)
     toast('评估报告已进入后台生成。', 'info')
-    navigate(`/report/${interviewId}?startEvaluation=1`, {
+    navigate(`/profile?startEvaluation=${interviewId}`, {
       state: {
-        startEvaluation: true,
-        evaluationStatus: 'evaluating',
+        pendingInterview: {
+          id: interviewId,
+          role,
+          status: 'evaluating',
+          created_at: new Date().toISOString(),
+        },
       },
     })
-  }, [ending, interviewId, navigate, toast])
+  }, [ending, interviewId, navigate, role, toast])
 
   useEffect(() => {
     let alive = true
@@ -1278,18 +1330,92 @@ function InterviewRoom() {
 
 function ProfilePage() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const [searchParams] = useSearchParams()
   const toast = useToast()
   const pageRef = useRef(null)
+  const evaluationStartRef = useRef(null)
+  const pendingCreatedAtRef = useRef(new Date().toISOString())
+  const pendingInterviewId = searchParams.get('startEvaluation')
+  const pendingInterview = location.state?.pendingInterview
   const [history, setHistory] = useState([])
   const [filterRole, setFilterRole] = useState('All')
   const [filterDifficulty, setFilterDifficulty] = useState('All')
+  const pendingRecord = useMemo(() => {
+    if (!pendingInterviewId) return null
+    return {
+      id: pendingInterviewId,
+      role: pendingInterview?.role || '目标岗位',
+      difficulty: pendingInterview?.difficulty || '中等',
+      total_score: null,
+      status: 'evaluating',
+      created_at: pendingInterview?.created_at || pendingCreatedAtRef.current,
+    }
+  }, [pendingInterview, pendingInterviewId])
+
+  const withPendingRecord = useCallback(
+    (records) => {
+      if (!pendingRecord) return records
+      const hasRecord = records.some((item) => String(item.id) === String(pendingRecord.id))
+      return hasRecord ? records : [pendingRecord, ...records]
+    },
+    [pendingRecord],
+  )
+
+  const loadHistory = useCallback(
+    async ({ includePending = false } = {}) => {
+      const { data } = await api.get('/interview/history')
+      const records = Array.isArray(data) ? data : []
+      setHistory(includePending ? withPendingRecord(records) : records)
+      return records
+    },
+    [withPendingRecord],
+  )
 
   useEffect(() => {
-    api
-      .get('/interview/history')
-      .then(({ data }) => setHistory(Array.isArray(data) ? data : []))
+    loadHistory({ includePending: Boolean(pendingRecord) })
       .catch((error) => toast(`无法加载历史记录：${getErrorMessage(error)}`, 'error'))
-  }, [toast])
+  }, [loadHistory, pendingRecord, toast])
+
+  useEffect(() => {
+    if (!pendingInterviewId || !pendingRecord || evaluationStartRef.current === pendingInterviewId) return undefined
+
+    let alive = true
+    evaluationStartRef.current = pendingInterviewId
+    setHistory((current) => withPendingRecord(current))
+
+    async function startEvaluation() {
+      try {
+        await api.post(`/interview/${pendingInterviewId}/end`, null, { timeout: 30000 })
+        if (!alive) return
+        await loadHistory({ includePending: true })
+        navigate('/profile', { replace: true })
+      } catch (error) {
+        if (!alive) return
+        toast(`提交评估任务失败：${getErrorMessage(error)}`, 'error')
+        setHistory((current) =>
+          current.map((item) =>
+            String(item.id) === String(pendingInterviewId) ? { ...item, status: 'evaluation_failed' } : item,
+          ),
+        )
+      }
+    }
+
+    startEvaluation()
+    return () => {
+      alive = false
+    }
+  }, [loadHistory, navigate, pendingInterviewId, pendingRecord, toast, withPendingRecord])
+
+  useEffect(() => {
+    if (!history.some(isHistoryGenerating)) return undefined
+
+    const timerId = window.setInterval(() => {
+      loadHistory().catch(() => {})
+    }, EVALUATION_POLL_INTERVAL_MS)
+
+    return () => window.clearInterval(timerId)
+  }, [history, loadHistory])
 
   const availableRoles = useMemo(() => Array.from(new Set(history.map((item) => item.role))), [history])
   const roleFilterOptions = useMemo(
@@ -1310,9 +1436,10 @@ function ProfilePage() {
     [filterDifficulty, filterRole, history],
   )
   const averageScore = useMemo(() => {
-    if (!history.length) return '0.0'
-    const total = history.reduce((sum, item) => sum + Number(item.total_score || 0), 0)
-    return (total / history.length).toFixed(1)
+    const completedHistory = history.filter(isHistoryCompleted)
+    if (!completedHistory.length) return '0.0'
+    const total = completedHistory.reduce((sum, item) => sum + Number(item.total_score || 0), 0)
+    return (total / completedHistory.length).toFixed(1)
   }, [history])
   const topRole = history[0]?.role || '暂无'
 
@@ -1362,10 +1489,10 @@ function ProfilePage() {
               />
             </div>
           </div>
-          {history.length ? (
+          {history.some(isHistoryCompleted) ? (
             <HistoryLineChart history={history} filterRole={filterRole} filterDifficulty={filterDifficulty} />
           ) : (
-            <EmptyState text="暂无面试数据" />
+            <EmptyState text={history.length ? '报告生成完成后会更新曲线' : '暂无面试数据'} />
           )}
         </section>
       </section>
@@ -1390,21 +1517,43 @@ function ProfilePage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredHistory.map((item) => (
-                  <tr key={item.id}>
-                    <td>{formatDateTime(item.created_at)}</td>
-                    <td>{item.role}</td>
-                    <td>
-                      <span className={`difficulty ${difficultyTone(item.difficulty)}`}>{item.difficulty || '中等'}</span>
-                    </td>
-                    <td className="score-cell">{Number(item.total_score || 0).toFixed(1)}</td>
-                    <td className="right">
-                      <button className="inline-link" onClick={() => navigate(`/report/${item.id}`)}>
-                        查看报告 <ChevronRight size={14} />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {filteredHistory.map((item) => {
+                  const generating = isHistoryGenerating(item)
+                  const failed = isHistoryFailed(item)
+                  return (
+                    <tr key={item.id}>
+                      <td>{formatDateTime(item.created_at)}</td>
+                      <td>{item.role}</td>
+                      <td>
+                        <span className={`difficulty ${difficultyTone(item.difficulty)}`}>{item.difficulty || '中等'}</span>
+                      </td>
+                      <td className="score-cell">
+                        {generating ? (
+                          <span className="history-status">报告生成中</span>
+                        ) : failed ? (
+                          <span className="history-status error">生成失败</span>
+                        ) : (
+                          Number(item.total_score || 0).toFixed(1)
+                        )}
+                      </td>
+                      <td className="right">
+                        {generating ? (
+                          <button className="inline-link pending" disabled>
+                            生成中 <LoaderCircle className="spin" size={14} />
+                          </button>
+                        ) : failed ? (
+                          <button className="inline-link pending" disabled>
+                            生成失败
+                          </button>
+                        ) : (
+                          <button className="inline-link" onClick={() => navigate(`/report/${item.id}`)}>
+                            查看报告 <ChevronRight size={14} />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
                 {!filteredHistory.length && (
                   <tr>
                     <td colSpan="5">
@@ -1875,7 +2024,7 @@ function HistoryLineChart({ history, filterRole, filterDifficulty }) {
         .filter((item) => {
           const roleMatch = filterRole === 'All' || item.role === filterRole
           const diffMatch = filterDifficulty === 'All' || item.difficulty === filterDifficulty
-          return roleMatch && diffMatch
+          return roleMatch && diffMatch && isHistoryCompleted(item)
         }),
     [filterDifficulty, filterRole, history],
   )
