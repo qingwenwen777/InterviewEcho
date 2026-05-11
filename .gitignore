@@ -21,7 +21,8 @@ Thumbs.db
 .vscode/
 
 #scripts 整个目录
-scripts/
+scripts/*
+!scripts/deploy.ps1
 
 # RAG向量仓库
 vector_index.json

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, UploadFile, File
 import uuid
 import shutil
 import tempfile
@@ -12,7 +12,7 @@ import json
 import os
 import random
 from db import models, schemas
-from db.database import get_db
+from db.database import SessionLocal, get_db
 from datetime import datetime
 
 router = APIRouter()
@@ -53,6 +53,39 @@ def _evaluation_payload(interview: models.Interview, eval_record: models.Evaluat
         "report_json": report_data,
         "created_at": eval_record.created_at,
     }
+
+
+def _normalize_url(value: str) -> str:
+    return (value or "").strip().rstrip("/")
+
+
+def _summary_matches_url(summary: dict, url: str) -> bool:
+    if not isinstance(summary, dict):
+        return False
+    target = _normalize_url(url)
+    if not target:
+        return False
+    candidates = [
+        summary.get("url", ""),
+        f"https://github.com/{summary.get('full_name', '')}",
+    ]
+    return any(_normalize_url(candidate) == target for candidate in candidates if candidate)
+
+
+def _question_was_asked(question: str, ai_messages: list) -> bool:
+    if not question:
+        return False
+    return any(question in (m.content or "") for m in ai_messages)
+
+
+def _with_forced_question(text: str, question: str, repo_name: str = "") -> str:
+    text = (text or "").strip()
+    if not question or question in text:
+        return text
+    if text and text[-1] not in "。！？!?":
+        text += "。"
+    prefix = f"接下来我想针对你的 GitHub 项目 {repo_name} 深挖一个具体问题：" if repo_name else "接下来我想针对你的 GitHub 项目深挖一个具体问题："
+    return f"{text} {prefix}{question}" if text else f"{prefix}{question}"
 
 ROLES = [
     {
@@ -132,8 +165,6 @@ def get_random_starting_question(role_name: str, difficulty: str = "medium", kno
 def get_roles():
     return ROLES
 
-from fastapi import Header
-
 def get_current_user_id(authorization: str = Header(None)):
     if not authorization:
         raise HTTPException(status_code=401, detail="Missing Authorization Header")
@@ -164,18 +195,23 @@ async def analyze_repo_endpoint(data: schemas.RepoAnalyzeRequest, user_id: int =
 async def start_interview(data: schemas.InterviewStart, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
     knowledge_points_json = json.dumps(data.knowledge_points) if data.knowledge_points else "[]"
 
-    # v3: 如果用户提供了 GitHub 项目链接，抓取摘要 + 生成定制问题
+    # v3: 如果用户提供了 GitHub 项目链接，优先复用前端预分析摘要，再生成定制问题
     repo_context_json = None
     custom_questions_json = None
     repo_urls = (data.repo_urls or [])[:3]   # 最多 3 个
     if repo_urls:
-        print(f"[start_interview] analyzing {len(repo_urls)} repos...")
+        preview_summaries = data.repo_summaries or []
+        print(f"[start_interview] preparing {len(repo_urls)} repos...")
         repo_summaries = []
         all_custom_questions = []
         for url in repo_urls:
             if not url or not url.strip():
                 continue
-            summary = await analyze_repo(url)
+            summary = next((item for item in preview_summaries if _summary_matches_url(item, url)), None)
+            if summary:
+                print(f"[start_interview] reuse preview summary: {summary.get('full_name', url)}")
+            else:
+                summary = await analyze_repo(url)
             if summary is None:
                 print(f"[start_interview] skip invalid repo: {url}")
                 continue
@@ -379,10 +415,12 @@ async def process_message_logic(interview_id: int, content: str, db: Session, us
 
     has_custom = len(custom_questions_list) > 0
     if has_custom:
-        # 4 段分布，n>=4 时每段都有；n<4 时压缩不问行为
+        # 4 段分布：为 GitHub 项目深挖预留明确轮次，多仓库时尽量覆盖更多仓库。
+        custom_repo_count = len({q.get("repo") for q in custom_questions_list if q.get("repo")}) or 1
         scenario_end = max(1, n // 4)
-        project_end = scenario_end + max(1, n // 4)
-        solving_end = project_end + max(1, n // 4)
+        project_rounds = min(custom_repo_count, max(1, n // 3))
+        project_end = min(n, scenario_end + project_rounds)
+        solving_end = min(n, project_end + max(1, (n - project_end) // 2))
         if question_count < scenario_end:
             current_stage = "business_scenario"
         elif question_count < project_end:
@@ -407,18 +445,24 @@ async def process_message_logic(interview_id: int, content: str, db: Session, us
     role_key = role_info["key"] if role_info else "java-backend"
     kp_list = json.loads(interview.knowledge_points) if interview.knowledge_points else []
 
-    # Logic for picking the "Next Target"
-    asked_titles = [m.content.split("接下来，")[-1] for m in main_questions_asked]  # Simple heuristic
-
     if current_stage == "project" and has_custom:
-        # 优先从定制问题里挑未问过的
-        available_custom = [q for q in custom_questions_list if q.get("question") not in asked_titles]
+        # 项目深挖题走强制队列：按生成顺序挑第一道未问过的，避免面试官模型跳过 GitHub 内容。
+        available_custom = [
+            q for q in custom_questions_list
+            if not _question_was_asked(q.get("question", ""), ai_msgs)
+        ]
         if available_custom:
-            target_q_obj = random.choice(available_custom)
+            asked_repos = {
+                q.get("repo")
+                for q in custom_questions_list
+                if _question_was_asked(q.get("question", ""), ai_msgs)
+            }
+            available_custom.sort(key=lambda q: q.get("repo") in asked_repos)
+            target_q_obj = available_custom[0]
         else:
             # 定制问完了，降级到静态 project 题库
             potential_next = get_questions_by_category(role_key, "project", interview.difficulty, kp_list)
-            available_next = [q for q in potential_next if q["question"] not in asked_titles]
+            available_next = [q for q in potential_next if not _question_was_asked(q["question"], ai_msgs)]
             target_q_obj = random.choice(available_next if available_next else potential_next) if potential_next else {"question": "继续谈谈你的项目经验吧。", "key_points": []}
     else:
         potential_next = get_questions_by_category(role_key, current_stage, interview.difficulty, kp_list)
@@ -434,7 +478,7 @@ async def process_message_logic(interview_id: int, content: str, db: Session, us
                 if potential_next:
                     break
 
-        available_next = [q for q in potential_next if q["question"] not in asked_titles]
+        available_next = [q for q in potential_next if not _question_was_asked(q["question"], ai_msgs)]
         target_q_obj = random.choice(available_next if available_next else potential_next) if potential_next else {"question": "请继续。", "key_points": []}
     
     # 5. Prepare LLM Context
@@ -448,6 +492,9 @@ async def process_message_logic(interview_id: int, content: str, db: Session, us
     force_next = ""
     if current_follow_up_count >= 2:
         force_next = "【系统指令：强制切换】当前话题已追问满 2 次，请务必结束当前话题，给出一个简短评价并过渡到下一个问题。"
+    if current_stage == "project" and has_custom:
+        repo_name = target_q_obj.get("repo", "")
+        force_next = f"【系统指令：GitHub 项目深挖】必须结束当前话题并切换到项目深挖。下一题必须围绕候选人的 GitHub 仓库{repo_name}，必须自然问出：{target_q_obj.get('question', '')}"
 
     # Check if this is the absolute last round
     is_final_move = False
@@ -462,13 +509,20 @@ async def process_message_logic(interview_id: int, content: str, db: Session, us
     llm_resp = await generate_llm_response(
         role=interview.role,
         question=last_main_q.content,
-        expected_points="技术准确性、实践经验", # Can be more dynamic if we store key_points
+        expected_points="、".join(target_q_obj.get("key_points") or target_q_obj.get("expected_points") or ["技术准确性", "实践经验"]),
         conversation_history=history_str,
         target_next_question=target_next_text,
         difficulty=interview.difficulty,
         knowledge_points=interview.knowledge_points,
         force_next_instruction=force_next
     )
+    if current_stage == "project" and has_custom and not is_final_move:
+        llm_resp["action"] = "MOVE_NEXT"
+        llm_resp["text"] = _with_forced_question(
+            llm_resp.get("text", ""),
+            target_next_text,
+            target_q_obj.get("repo", ""),
+        )
 
     # 7. Update State
     final_is_ended = False
@@ -502,30 +556,10 @@ async def process_message_logic(interview_id: int, content: str, db: Session, us
     # 返回值为 Tuple，包含新生成的 user_msg 的主键 ID
     return response, user_msg.id
 
-@router.get("/history", response_model=List[schemas.EvaluationSummary])
-def get_interview_history(db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
-    # Fetch completed interviews for the specific user
-    results = db.query(models.Evaluation).join(models.Interview).filter(
-        models.Interview.user_id == user_id,
-        models.Interview.status == "completed"
-    ).order_by(models.Evaluation.created_at.desc()).all()
-    
-    return [
-        schemas.EvaluationSummary(
-            id=e.interview_id,
-            role=e.interview.role,
-            difficulty=e.interview.difficulty,
-            total_score=e.total_score,
-            created_at=e.created_at
-        ) for e in results
-    ]
-
-@router.post("/{interview_id}/end")
-async def end_interview(interview_id: int, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
-    interview = db.query(models.Interview).filter(models.Interview.id == interview_id, models.Interview.user_id == user_id).first()
+async def _build_and_store_evaluation(interview_id: int, db: Session) -> dict | None:
+    interview = db.query(models.Interview).filter(models.Interview.id == interview_id).first()
     if not interview:
-        raise HTTPException(status_code=404, detail="Interview not found or unauthorized")
-
+        return None
     existing_eval = db.query(models.Evaluation).filter(
         models.Evaluation.interview_id == interview_id
     ).first()
@@ -542,7 +576,7 @@ async def end_interview(interview_id: int, db: Session = Depends(get_db), user_i
 
     # 1. Gather all messages for evaluation
     messages = db.query(models.Message).filter(models.Message.interview_id == interview_id).order_by(models.Message.created_at.asc()).all()
-    
+
     # 2. Call Real LLM Evaluator (Async). The evaluator itself has a hard timeout
     # and returns a fallback report if the model service is unavailable.
     evaluation_data = await evaluate_full_interview(messages, role=interview.role)
@@ -652,4 +686,109 @@ async def end_interview(interview_id: int, db: Session = Depends(get_db), user_i
     return {
         "message": "Interview ended and evaluated successfully.",
         "evaluation": _evaluation_payload(interview, eval_record),
+    }
+
+
+async def _run_evaluation_job(interview_id: int):
+    db = SessionLocal()
+    try:
+        result = await _build_and_store_evaluation(interview_id, db)
+        if result is None:
+            print(f"[evaluation_job] interview not found: {interview_id}")
+    except Exception as e:
+        print(f"[evaluation_job] failed for interview={interview_id}: {type(e).__name__}: {e}")
+        db.rollback()
+        interview = db.query(models.Interview).filter(models.Interview.id == interview_id).first()
+        if interview:
+            interview.status = "evaluation_failed"
+            db.commit()
+    finally:
+        db.close()
+
+
+@router.get("/history", response_model=List[schemas.EvaluationSummary])
+def get_interview_history(db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
+    # Fetch completed interviews for the specific user
+    results = db.query(models.Evaluation).join(models.Interview).filter(
+        models.Interview.user_id == user_id,
+        models.Interview.status == "completed"
+    ).order_by(models.Evaluation.created_at.desc()).all()
+
+    return [
+        schemas.EvaluationSummary(
+            id=e.interview_id,
+            role=e.interview.role,
+            difficulty=e.interview.difficulty,
+            total_score=e.total_score,
+            created_at=e.created_at
+        ) for e in results
+    ]
+
+
+@router.get("/{interview_id}/evaluation/status")
+def get_evaluation_status(interview_id: int, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
+    interview = db.query(models.Interview).filter(models.Interview.id == interview_id, models.Interview.user_id == user_id).first()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview not found or unauthorized")
+
+    eval_record = db.query(models.Evaluation).filter(models.Evaluation.interview_id == interview_id).first()
+    if eval_record:
+        return {
+            "interview_id": interview_id,
+            "status": "completed",
+            "retryable": False,
+            "evaluation": _evaluation_payload(interview, eval_record),
+        }
+
+    status = interview.status or "in_progress"
+    return {
+        "interview_id": interview_id,
+        "status": status,
+        "retryable": status in {"evaluation_failed", "completed"},
+        "message": "评估报告正在生成中。" if status == "evaluating" else "评估报告尚未生成。",
+    }
+
+
+@router.post("/{interview_id}/end")
+async def end_interview(
+    interview_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
+    interview = db.query(models.Interview).filter(models.Interview.id == interview_id, models.Interview.user_id == user_id).first()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview not found or unauthorized")
+
+    existing_eval = db.query(models.Evaluation).filter(
+        models.Evaluation.interview_id == interview_id
+    ).first()
+    if existing_eval:
+        if interview.status != "completed":
+            interview.status = "completed"
+            interview.end_time = interview.end_time or datetime.utcnow()
+            db.commit()
+            db.refresh(existing_eval)
+        return {
+            "message": "Interview already evaluated.",
+            "status": "completed",
+            "evaluation": _evaluation_payload(interview, existing_eval),
+        }
+
+    if interview.status == "evaluating":
+        return {
+            "message": "Evaluation already running.",
+            "status": "evaluating",
+            "interview_id": interview_id,
+        }
+
+    interview.status = "evaluating"
+    interview.end_time = interview.end_time or datetime.utcnow()
+    db.commit()
+    background_tasks.add_task(_run_evaluation_job, interview_id)
+
+    return {
+        "message": "Evaluation started.",
+        "status": "evaluating",
+        "interview_id": interview_id,
     }

@@ -80,6 +80,14 @@ const FALLBACK_ROLES = [
 ]
 
 const DIFFICULTIES = ['简单', '中等', '困难']
+const EVALUATION_POLL_INTERVAL_MS = 2500
+
+function evaluationStatusText(status) {
+  if (status === 'evaluating') return '评估报告正在生成，请稍等片刻。'
+  if (status === 'evaluation_failed') return '评估报告生成失败，请稍后重试。'
+  if (status === 'completed') return '评估报告已生成，正在加载。'
+  return '正在检查评估报告状态。'
+}
 const BRAND_WORDS = ['Interview', 'Insight', 'Improve', 'Inspire', 'Iterate']
 
 const AuthContext = createContext(null)
@@ -746,8 +754,8 @@ function DashboardPage() {
     setStartingCopy(
       hasRepos
         ? {
-            title: '正在分析 GitHub 项目',
-            text: '后端会抓取仓库摘要并生成项目深挖题，请保持页面打开。',
+            title: '正在整理 GitHub 项目',
+            text: '将复用已分析的仓库摘要，并生成项目深挖题。',
           }
         : {
             title: '正在准备面试房间',
@@ -762,7 +770,7 @@ function DashboardPage() {
           role: selectedRole.name,
           ...settings,
         },
-        { timeout: hasRepos ? 180000 : 30000 },
+        { timeout: hasRepos ? 90000 : 30000 },
       )
       navigate(`/interview/${encodeURIComponent(selectedRole.name)}?interviewId=${data.id}`)
     } catch (error) {
@@ -870,15 +878,16 @@ function StartSettingsModal({ role, open, onClose, onConfirm }) {
   }
 
   const submit = () => {
-    const repo_urls = repoSlots
-      .filter((slot) => slot.url.trim() && !slot.error)
-      .map((slot) => slot.url.trim())
+    const selectedRepoSlots = repoSlots.filter((slot) => slot.url.trim() && !slot.error)
+    const repo_urls = selectedRepoSlots.map((slot) => slot.url.trim())
+    const repo_summaries = selectedRepoSlots.map((slot) => slot.summary).filter(Boolean)
 
     onConfirm({
       difficulty,
       total_rounds: Number(rounds),
       knowledge_points: selectedSections,
       repo_urls,
+      repo_summaries,
     })
     onClose()
   }
@@ -1042,13 +1051,17 @@ function InterviewRoom() {
   const endInterview = useCallback(async () => {
     if (!interviewId || ending) return
     setEnding(true)
-    toast('正在生成评估报告，这一步可能需要几十秒。', 'info')
+    toast('评估报告已进入后台生成。', 'info')
     try {
-      const { data } = await api.post(`/interview/${interviewId}/end`, null, { timeout: 180000 })
-      toast('评估报告已生成。', 'success')
-      navigate(`/report/${interviewId}`, { state: { evaluation: data.evaluation } })
+      const { data } = await api.post(`/interview/${interviewId}/end`, null, { timeout: 30000 })
+      navigate(`/report/${interviewId}`, {
+        state: {
+          evaluation: data.evaluation || null,
+          evaluationStatus: data.status || 'evaluating',
+        },
+      })
     } catch (error) {
-      toast(`生成报告失败：${getErrorMessage(error)}`, 'error')
+      toast(`提交评估任务失败：${getErrorMessage(error)}`, 'error')
       setEnding(false)
     }
   }, [ending, interviewId, navigate, toast])
@@ -1421,17 +1434,44 @@ function ReportPage() {
   const toast = useToast()
   const pageRef = useRef(null)
   const [report, setReport] = useState(location.state?.evaluation || null)
+  const [reportStatus, setReportStatus] = useState(location.state?.evaluationStatus || 'loading')
+  const [reportError, setReportError] = useState('')
 
   useEffect(() => {
-    if (report || !id) return
-    api
-      .get(`/interview/${id}/evaluation`)
-      .then(({ data }) => setReport(data))
-      .catch((error) => {
-        toast(`无法加载评估报告：${getErrorMessage(error)}`, 'error')
-        navigate('/profile')
-      })
-  }, [id, navigate, report, toast])
+    if (report || !id) return undefined
+    let alive = true
+    let timerId
+
+    const loadStatus = async () => {
+      try {
+        const { data } = await api.get(`/interview/${id}/evaluation/status`, { timeout: 30000 })
+        if (!alive) return
+
+        setReportStatus(data.status || 'loading')
+        if (data.evaluation) {
+          setReport(data.evaluation)
+          setReportError('')
+          return
+        }
+
+        if (data.status === 'evaluation_failed') {
+          setReportError('评估报告生成失败，可以回到面试历史后重新生成。')
+          return
+        }
+
+        timerId = window.setTimeout(loadStatus, EVALUATION_POLL_INTERVAL_MS)
+      } catch (error) {
+        if (!alive) return
+        setReportError(`无法加载评估报告：${getErrorMessage(error)}`)
+      }
+    }
+
+    loadStatus()
+    return () => {
+      alive = false
+      if (timerId) window.clearTimeout(timerId)
+    }
+  }, [id, report])
 
   const parsedReport = useMemo(() => parseReportData(report), [report])
   useDampedSnapScroll(pageRef)
@@ -1439,7 +1479,7 @@ function ReportPage() {
   if (!report) {
     return (
       <div className="page enter-page">
-        <EmptyState text="正在加载评估报告" loading />
+        <EmptyState text={reportError || evaluationStatusText(reportStatus)} loading={!reportError} />
       </div>
     )
   }
