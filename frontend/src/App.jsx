@@ -388,7 +388,6 @@ function HomeIntroIcon() {
         <path
           className="home-intro-icon-path"
           pathLength="1"
-          vectorEffect="non-scaling-stroke"
           strokeWidth="4.1"
           d="M18.4 13.2C23.7 11.7 40.3 11.7 45.6 13.2C47.5 13.8 48 16 46.3 17.3C41.7 20.8 36.2 26 32 32C36.2 38 41.7 43.2 46.3 46.7C48 48 47.5 50.2 45.6 50.8C40.3 52.3 23.7 52.3 18.4 50.8C16.5 50.2 16 48 17.7 46.7C22.3 43.2 27.8 38 32 32C27.8 26 22.3 20.8 17.7 17.3C16 16 16.5 13.8 18.4 13.2Z"
         />
@@ -525,15 +524,18 @@ function HomeIntroTitle({ onIntroComplete }) {
           </span>
         </span>
         <span className="home-echo-word">
-          {title.echoLetters.map((letter, index) => (
-            <span
-              className={`home-echo-letter ${index < title.echoCount ? 'is-visible' : ''}`}
-              key={`${letter}-${index}`}
-              style={{ '--letter-index': index }}
-            >
-              {letter}
-            </span>
-          ))}
+          {title.echoLetters.map((letter, index) => {
+            const letterWidth = (TITLE_CHAR_WIDTH[letter.toLowerCase()] ?? 0.5) + 0.055
+            return (
+              <span
+                className={`home-echo-letter ${index < title.echoCount ? 'is-visible' : ''}`}
+                key={`${letter}-${index}`}
+                style={{ '--letter-em': `${letterWidth}em`, '--letter-index': index }}
+              >
+                {letter}
+              </span>
+            )
+          })}
         </span>
       </span>
     </h1>
