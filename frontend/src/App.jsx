@@ -2581,6 +2581,12 @@ function StudyPlan({ plan }) {
   const weakAreas = plan.weak_areas || []
   const weeks = plan.plan || []
   const quickWins = plan.quick_wins || []
+  const weekIcons = [
+    <Code2 size={36} />,
+    <Settings size={36} />,
+    <Gauge size={36} />,
+    <MessageCircle size={36} />,
+  ]
   const blocks = [
     {
       icon: <BrainCircuit size={36} />,
@@ -2591,13 +2597,13 @@ function StudyPlan({ plan }) {
         : ['暂无明显薄弱领域，保持当前练习节奏'],
     },
     {
-      icon: <Sparkles size={36} />,
+      icon: <TimerReset size={36} />,
       kicker: '快速收益',
       title: '本周可立即完成',
       items: quickWins.length ? quickWins.slice(0, 3) : ['完成一次同岗位限时复盘', '整理 3 个高频追问答案'],
     },
     ...weeks.slice(0, 4).map((week, index) => ({
-      icon: index % 2 === 0 ? <CalendarClock size={36} /> : <FileText size={36} />,
+      icon: weekIcons[index] || <FileText size={36} />,
       kicker: `第 ${week.week || index + 1} 周`,
       title: week.focus || `第 ${index + 1} 周训练`,
       items: (week.tasks || []).slice(0, 3),
@@ -2608,7 +2614,7 @@ function StudyPlan({ plan }) {
     <div className="study-plan bai-study-plan">
       <div className="study-hero">
         <span className="study-hero-icon">
-          <Sparkles size={36} />
+          <TrendingUp size={36} />
         </span>
         <h3>四周能力提升路线</h3>
       </div>
