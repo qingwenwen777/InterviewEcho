@@ -1052,18 +1052,12 @@ function InterviewRoom() {
     if (!interviewId || ending) return
     setEnding(true)
     toast('评估报告已进入后台生成。', 'info')
-    try {
-      const { data } = await api.post(`/interview/${interviewId}/end`, null, { timeout: 30000 })
-      navigate(`/report/${interviewId}`, {
-        state: {
-          evaluation: data.evaluation || null,
-          evaluationStatus: data.status || 'evaluating',
-        },
-      })
-    } catch (error) {
-      toast(`提交评估任务失败：${getErrorMessage(error)}`, 'error')
-      setEnding(false)
-    }
+    navigate(`/report/${interviewId}?startEvaluation=1`, {
+      state: {
+        startEvaluation: true,
+        evaluationStatus: 'evaluating',
+      },
+    })
   }, [ending, interviewId, navigate, toast])
 
   useEffect(() => {
@@ -1431,10 +1425,12 @@ function ReportPage() {
   const { id } = useParams()
   const location = useLocation()
   const navigate = useNavigate()
-  const toast = useToast()
+  const [searchParams] = useSearchParams()
   const pageRef = useRef(null)
+  const evaluationStartRef = useRef(null)
+  const shouldStartEvaluation = Boolean(location.state?.startEvaluation) || searchParams.get('startEvaluation') === '1'
   const [report, setReport] = useState(location.state?.evaluation || null)
-  const [reportStatus, setReportStatus] = useState(location.state?.evaluationStatus || 'loading')
+  const [reportStatus, setReportStatus] = useState(location.state?.evaluationStatus || (shouldStartEvaluation ? 'evaluating' : 'loading'))
   const [reportError, setReportError] = useState('')
 
   useEffect(() => {
@@ -1442,23 +1438,34 @@ function ReportPage() {
     let alive = true
     let timerId
 
+    const applyEvaluationStatus = (data) => {
+      setReportStatus(data.status || 'loading')
+      if (data.evaluation) {
+        setReport(data.evaluation)
+        setReportError('')
+        return true
+      }
+
+      if (data.status === 'evaluation_failed') {
+        setReportError('评估报告生成失败，可以回到面试历史后重新生成。')
+        return true
+      }
+
+      if (!shouldStartEvaluation && data.status === 'in_progress') {
+        setReportError('评估报告尚未开始，请先结束面试后再查看。')
+        return true
+      }
+
+      setReportError('')
+      return false
+    }
+
     const loadStatus = async () => {
       try {
         const { data } = await api.get(`/interview/${id}/evaluation/status`, { timeout: 30000 })
         if (!alive) return
 
-        setReportStatus(data.status || 'loading')
-        if (data.evaluation) {
-          setReport(data.evaluation)
-          setReportError('')
-          return
-        }
-
-        if (data.status === 'evaluation_failed') {
-          setReportError('评估报告生成失败，可以回到面试历史后重新生成。')
-          return
-        }
-
+        if (applyEvaluationStatus(data)) return
         timerId = window.setTimeout(loadStatus, EVALUATION_POLL_INTERVAL_MS)
       } catch (error) {
         if (!alive) return
@@ -1466,12 +1473,31 @@ function ReportPage() {
       }
     }
 
-    loadStatus()
+    const startAndLoadStatus = async () => {
+      if (shouldStartEvaluation && evaluationStartRef.current !== id) {
+        evaluationStartRef.current = id
+        setReportStatus('evaluating')
+        setReportError('')
+        try {
+          const { data } = await api.post(`/interview/${id}/end`, null, { timeout: 30000 })
+          if (!alive) return
+          if (applyEvaluationStatus(data)) return
+        } catch (error) {
+          if (!alive) return
+          setReportError(`提交评估任务失败：${getErrorMessage(error)}`)
+          return
+        }
+      }
+
+      loadStatus()
+    }
+
+    startAndLoadStatus()
     return () => {
       alive = false
       if (timerId) window.clearTimeout(timerId)
     }
-  }, [id, report])
+  }, [id, report, shouldStartEvaluation])
 
   const parsedReport = useMemo(() => parseReportData(report), [report])
   useDampedSnapScroll(pageRef)
