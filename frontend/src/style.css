@@ -5576,21 +5576,13 @@ strong {
   border: 0;
   border-radius: 0;
   background: transparent;
+  transform: translateY(clamp(-34px, -3vh, -18px));
 }
 
 .study-hero {
   max-width: 720px;
   margin: 0 auto clamp(44px, 6vh, 70px);
   text-align: center;
-}
-
-.study-hero-icon {
-  display: inline-grid;
-  width: 42px;
-  height: 42px;
-  place-items: center;
-  margin-bottom: 12px;
-  color: #000;
 }
 
 .study-hero h3 {
@@ -5815,6 +5807,10 @@ strong {
 }
 
 @media (max-width: 1180px) {
+  .report-page .study-plan.bai-study-plan {
+    transform: none;
+  }
+
   .study-hero {
     margin-bottom: 42px;
   }

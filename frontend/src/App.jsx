@@ -51,7 +51,6 @@ import {
   Square,
   Sun,
   TimerReset,
-  TrendingUp,
   Trophy,
   UserRound,
   X,
@@ -2613,9 +2612,6 @@ function StudyPlan({ plan }) {
   return (
     <div className="study-plan bai-study-plan">
       <div className="study-hero">
-        <span className="study-hero-icon">
-          <TrendingUp size={36} />
-        </span>
         <h3>四周能力提升路线</h3>
       </div>
       <div className="study-feature-grid">
