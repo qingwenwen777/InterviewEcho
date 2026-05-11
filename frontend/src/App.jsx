@@ -1009,6 +1009,7 @@ function StartSettingsModal({ role, open, onClose, onConfirm }) {
   const selectedRepoCount = repoSlots.filter((slot) => slot.url.trim() && !slot.error).length
   const selectedSectionText = selectedSections.length ? `已选 ${selectedSections.length} 项` : '默认完整流程'
   const roundText = `${rounds} 轮 · ${roundsTone(rounds)}`
+  const roundProgress = `${Math.min(100, Math.max(0, ((Number(rounds) - 2) / 8) * 100))}%`
 
   if (!open || !role) return null
 
@@ -1092,6 +1093,7 @@ function StartSettingsModal({ role, open, onClose, onConfirm }) {
                 min="2"
                 max="10"
                 value={rounds}
+                style={{ '--range-progress': roundProgress }}
                 onChange={(event) => setRounds(event.target.value)}
               />
               <div className="range-labels">
