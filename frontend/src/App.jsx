@@ -13,8 +13,9 @@ import { cpp } from '@codemirror/lang-cpp'
 import { java } from '@codemirror/lang-java'
 import { javascript } from '@codemirror/lang-javascript'
 import { python } from '@codemirror/lang-python'
-import { indentWithTab } from '@codemirror/commands'
+import { indentLess, indentMore } from '@codemirror/commands'
 import { indentUnit } from '@codemirror/language'
+import { EditorSelection } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import {
   Navigate,
@@ -99,6 +100,30 @@ const CODE_EDITOR_EXTENSIONS = {
   cpp,
   javascript,
 }
+const CODE_TAB_SPACES = '    '
+const insertSoftTabAtCursor = (view) => {
+  if (!view.state.selection.ranges.every((range) => range.empty)) {
+    return indentMore(view)
+  }
+
+  view.dispatch(
+    view.state.update(
+      view.state.changeByRange((range) => ({
+        changes: { from: range.from, insert: CODE_TAB_SPACES },
+        range: EditorSelection.cursor(range.from + CODE_TAB_SPACES.length),
+      })),
+      {
+        scrollIntoView: true,
+        userEvent: 'input',
+      },
+    ),
+  )
+  return true
+}
+const CODE_EDITOR_TAB_KEYMAP = keymap.of([
+  { key: 'Tab', run: insertSoftTabAtCursor },
+  { key: 'Shift-Tab', run: indentLess },
+])
 const CODE_EDITOR_THEME = EditorView.theme(
   {
     '&': {
@@ -2811,7 +2836,7 @@ function CodeProblemPage() {
   const languageOptions = useMemo(() => CODE_LANGUAGE_OPTIONS, [])
   const editorExtensions = useMemo(() => {
     const languageExtension = CODE_EDITOR_EXTENSIONS[language] || python
-    return [languageExtension(), indentUnit.of('    '), keymap.of([indentWithTab]), CODE_EDITOR_THEME]
+    return [languageExtension(), indentUnit.of(CODE_TAB_SPACES), CODE_EDITOR_TAB_KEYMAP, CODE_EDITOR_THEME]
   }, [language])
 
   useEffect(() => {
