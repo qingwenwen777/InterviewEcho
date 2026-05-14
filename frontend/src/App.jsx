@@ -8,6 +8,14 @@ import React, {
   useState,
 } from 'react'
 import { createPortal } from 'react-dom'
+import CodeMirror from '@uiw/react-codemirror'
+import { cpp } from '@codemirror/lang-cpp'
+import { java } from '@codemirror/lang-java'
+import { javascript } from '@codemirror/lang-javascript'
+import { python } from '@codemirror/lang-python'
+import { indentWithTab } from '@codemirror/commands'
+import { indentUnit } from '@codemirror/language'
+import { EditorView, keymap } from '@codemirror/view'
 import {
   Navigate,
   NavLink,
@@ -79,6 +87,81 @@ const FALLBACK_ROLES = [
 ]
 
 const DIFFICULTIES = ['简单', '中等', '困难']
+const CODE_LANGUAGE_OPTIONS = [
+  { value: 'python', label: 'Python' },
+  { value: 'java', label: 'Java' },
+  { value: 'cpp', label: 'C++' },
+  { value: 'javascript', label: 'JavaScript' },
+]
+const CODE_EDITOR_EXTENSIONS = {
+  python,
+  java,
+  cpp,
+  javascript,
+}
+const CODE_EDITOR_THEME = EditorView.theme(
+  {
+    '&': {
+      minHeight: '460px',
+      backgroundColor: '#101010',
+      color: '#f4f1e8',
+      fontSize: '14px',
+    },
+    '.cm-content': {
+      caretColor: '#fffdf7',
+      padding: '18px 0',
+    },
+    '.cm-line': {
+      padding: '0 18px',
+      lineHeight: '1.66',
+    },
+    '.cm-scroller': {
+      fontFamily: 'var(--mono)',
+      overflow: 'auto',
+    },
+    '.cm-gutters': {
+      backgroundColor: '#101010',
+      borderRight: '1px solid rgba(255, 253, 247, 0.1)',
+      color: 'rgba(255, 253, 247, 0.42)',
+    },
+    '.cm-activeLineGutter': {
+      backgroundColor: 'rgba(255, 253, 247, 0.06)',
+      color: '#fffdf7',
+    },
+    '.cm-activeLine': {
+      backgroundColor: 'rgba(255, 253, 247, 0.045)',
+    },
+    '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': {
+      backgroundColor: 'rgba(255, 253, 247, 0.22)',
+    },
+    '&.cm-focused': {
+      outline: 'none',
+    },
+  },
+  { dark: true },
+)
+const CODE_STATUS_TEXT = {
+  Accepted: 'Accepted',
+  'Wrong Answer': 'Wrong Answer',
+  'Compile Error': 'Compile Error',
+  'Runtime Error': 'Runtime Error',
+  'Time Limit Exceeded': 'Time Limit Exceeded',
+  'Judge Error': 'Judge Error',
+}
+const CODE_JUDGE_TIMEOUT_MS = 240000
+const CODE_RESULT_SYNC_ATTEMPTS = 24
+const CODE_RESULT_SYNC_INTERVAL_MS = 2500
+const CODE_CLIENT_ERROR_RESULT = {
+  index: 1,
+  is_sample: false,
+  passed: false,
+  status: 'Judge Error',
+  input: null,
+  expected_output: null,
+  actual_output: null,
+  stderr: null,
+  compile_output: null,
+}
 const SECTION_SKELETON_GROUPS = [
   { label: '基础技术', widths: [88, 112, 96, 132] },
   { label: '工程能力', widths: [150, 176, 102, 92] },
@@ -168,6 +251,22 @@ function App() {
               element={
                 <ProtectedRoute>
                   <ProfilePage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/code"
+              element={
+                <ProtectedRoute>
+                  <CodePracticePage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/code/problems/:problemId"
+              element={
+                <ProtectedRoute>
+                  <CodeProblemPage />
                 </ProtectedRoute>
               }
             />
@@ -314,6 +413,7 @@ function MainLayout() {
         <nav className="nav-links" aria-label="主导航">
           <SideLink to="/" label="工作台" />
           <SideLink to="/dashboard" label="模拟面试" />
+          <SideLink to="/code" label="代码练习" />
           <SideLink to="/profile" label="能力历史" />
         </nav>
 
@@ -343,7 +443,7 @@ function MainLayout() {
       <main
         className={`main-pane ${location.pathname === '/' ? 'home-main-pane' : ''} ${
           location.pathname === '/profile' || location.pathname.startsWith('/report/') ? 'review-main-pane' : ''
-        }`}
+        } ${location.pathname.startsWith('/code') ? 'code-main-pane' : ''}`}
       >
         <Outlet />
       </main>
@@ -2461,6 +2561,639 @@ function TypingDots() {
   )
 }
 
+function CodePracticePage() {
+  const navigate = useNavigate()
+  const toast = useToast()
+  const [problems, setProblems] = useState([])
+  const [tags, setTags] = useState([])
+  const [submissions, setSubmissions] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [historyLoading, setHistoryLoading] = useState(true)
+  const [keyword, setKeyword] = useState('')
+  const [difficulty, setDifficulty] = useState('全部')
+  const [tag, setTag] = useState('全部')
+
+  const difficultyOptions = useMemo(
+    () => [
+      { value: '全部', label: '全部难度' },
+      ...DIFFICULTIES.map((item) => ({ value: item, label: item })),
+    ],
+    [],
+  )
+  const tagOptions = useMemo(
+    () => [{ value: '全部', label: '全部主题' }, ...tags.map((item) => ({ value: item, label: item }))],
+    [tags],
+  )
+
+  useEffect(() => {
+    let alive = true
+    const params = {}
+    if (difficulty !== '全部') params.difficulty = difficulty
+    if (tag !== '全部') params.tag = tag
+    if (keyword.trim()) params.q = keyword.trim()
+    setLoading(true)
+    api
+      .get('/code/problems', { params })
+      .then(({ data }) => {
+        if (!alive) return
+        setProblems(data.items || [])
+        setTags(data.tags || [])
+      })
+      .catch((error) => {
+        if (alive) toast(getErrorMessage(error), 'error')
+      })
+      .finally(() => {
+        if (alive) setLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [difficulty, keyword, tag, toast])
+
+  useEffect(() => {
+    let alive = true
+    setHistoryLoading(true)
+    api
+      .get('/code/submissions')
+      .then(({ data }) => {
+        if (alive) setSubmissions(Array.isArray(data) ? data : [])
+      })
+      .catch(() => {
+        if (alive) setSubmissions([])
+      })
+      .finally(() => {
+        if (alive) setHistoryLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const solvedCount = problems.filter((item) => item.solved).length
+  const judgableCount = problems.filter((item) => item.judgable).length
+
+  return (
+    <div className="page code-page enter-page">
+      <PageHeader
+        eyebrow="Hot100 ACM"
+        title="代码练习"
+        subtitle="用完整程序读写 stdin/stdout，补上现场编码的最后一块肌肉记忆。"
+      />
+
+      <section className="code-hero-strip">
+        <div>
+          <span>Hot100</span>
+          <strong>{problems.length || 100}</strong>
+          <p>高频算法题型</p>
+        </div>
+        <div>
+          <span>Ready</span>
+          <strong>{judgableCount}</strong>
+          <p>已开放完整判题</p>
+        </div>
+        <div>
+          <span>Accepted</span>
+          <strong>{solvedCount}</strong>
+          <p>当前账号通过</p>
+        </div>
+      </section>
+
+      <section className="code-filter-bar">
+        <label className="code-search">
+          <Code2 size={18} />
+          <input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索题名或 slug" />
+        </label>
+        <FilterSelect ariaLabel="筛选代码题难度" value={difficulty} options={difficultyOptions} onChange={setDifficulty} />
+        <FilterSelect ariaLabel="筛选代码题标签" value={tag} options={tagOptions} onChange={setTag} />
+      </section>
+
+      <div className="code-workspace-grid">
+        <section className="code-list-panel">
+          <div className="code-section-head">
+            <div>
+              <h2>题目列表</h2>
+              <p>简洁题面，ACM 输入输出，不依赖函数签名。</p>
+            </div>
+          </div>
+
+          {loading ? (
+            <EmptyState text="正在整理题库" loading />
+          ) : problems.length ? (
+            <div className="code-problem-list">
+              {problems.map((problem) => (
+                <button
+                  type="button"
+                  className={`code-problem-row ${problem.solved ? 'solved' : ''}`}
+                  key={problem.id}
+                  onClick={() => navigate(`/code/problems/${problem.id}`)}
+                >
+                  <span className="code-row-index">{String(problem.id).padStart(2, '0')}</span>
+                  <span className="code-row-main">
+                    <strong>{problem.title}</strong>
+                    <span>
+                      {problem.tags.slice(0, 4).map((item) => (
+                        <em key={`${problem.id}-${item}`}>{item}</em>
+                      ))}
+                    </span>
+                  </span>
+                  <span className={`difficulty-badge ${difficultyTone(problem.difficulty)}`}>{problem.difficulty}</span>
+                  <span className={`code-status-pill ${problem.solved ? 'accepted' : problem.judgable ? 'ready' : 'draft'}`}>
+                    {problem.solved ? '已通过' : problem.judgable ? '可练习' : '占位'}
+                  </span>
+                  <ChevronRight size={17} />
+                </button>
+              ))}
+            </div>
+          ) : (
+            <EmptyState text="没有匹配的题目" />
+          )}
+        </section>
+
+        <aside className="code-history-panel">
+          <div className="code-section-head compact">
+            <div>
+              <h2>最近提交</h2>
+              <p>只展示正式提交，不记录样例运行。</p>
+            </div>
+          </div>
+          {historyLoading ? (
+            <EmptyState text="正在读取提交历史" loading compact />
+          ) : submissions.length ? (
+            <div className="code-history-list">
+              {submissions.slice(0, 10).map((item) => (
+                <button
+                  type="button"
+                  className="code-history-item"
+                  key={item.id}
+                  onClick={() => navigate(`/code/problems/${item.problem_id}`)}
+                >
+                  <span className={`code-status-dot ${statusTone(item.status)}`} />
+                  <strong>{item.problem_title || `题目 ${item.problem_id}`}</strong>
+                  <span>
+                    {languageLabel(item.language)} · {item.passed_count}/{item.total_count} · {formatDateTime(item.created_at)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <EmptyState text="还没有正式提交" compact />
+          )}
+        </aside>
+      </div>
+    </div>
+  )
+}
+
+function CodeProblemPage() {
+  const { problemId } = useParams()
+  const navigate = useNavigate()
+  const toast = useToast()
+  const [problem, setProblem] = useState(null)
+  const [submissions, setSubmissions] = useState([])
+  const [language, setLanguage] = useState('python')
+  const [sourceCode, setSourceCode] = useState('')
+  const [codeByLanguage, setCodeByLanguage] = useState({})
+  const [loading, setLoading] = useState(true)
+  const [running, setRunning] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [result, setResult] = useState(null)
+  const [resultMode, setResultMode] = useState('')
+  const languageRef = useRef(language)
+
+  const languageOptions = useMemo(() => CODE_LANGUAGE_OPTIONS, [])
+  const editorExtensions = useMemo(() => {
+    const languageExtension = CODE_EDITOR_EXTENSIONS[language] || python
+    return [languageExtension(), indentUnit.of('    '), keymap.of([indentWithTab]), CODE_EDITOR_THEME]
+  }, [language])
+
+  useEffect(() => {
+    languageRef.current = language
+  }, [language])
+
+  const refreshSubmissions = useCallback(async () => {
+    if (!problem?.id) return []
+    try {
+      const { data } = await api.get('/code/submissions', { params: { problem_id: problem.id } })
+      const nextSubmissions = Array.isArray(data) ? data : []
+      setSubmissions(nextSubmissions)
+      return nextSubmissions
+    } catch {
+      setSubmissions([])
+      return []
+    }
+  }, [problem?.id])
+
+  useEffect(() => {
+    let alive = true
+    setLoading(true)
+    api
+      .get(`/code/problems/${problemId}`)
+      .then(({ data }) => {
+        if (!alive) return
+        const starterCode = data.starter_code || {}
+        const preferredLanguage = starterCode[languageRef.current] !== undefined ? languageRef.current : 'python'
+        setProblem(data)
+        setLanguage(preferredLanguage)
+        setCodeByLanguage(starterCode)
+        setSourceCode(starterCode[preferredLanguage] || '')
+        setResult(null)
+        setResultMode('')
+      })
+      .catch((error) => {
+        if (alive) toast(getErrorMessage(error), 'error')
+      })
+      .finally(() => {
+        if (alive) setLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [problemId, toast])
+
+  useEffect(() => {
+    refreshSubmissions()
+  }, [refreshSubmissions])
+
+  const syncLatestSubmissionResult = useCallback(
+    async (previousLatestId) => {
+      if (!problem?.id) return false
+      for (let attempt = 0; attempt < CODE_RESULT_SYNC_ATTEMPTS; attempt += 1) {
+        if (attempt > 0) {
+          await new Promise((resolve) => {
+            window.setTimeout(resolve, CODE_RESULT_SYNC_INTERVAL_MS)
+          })
+        }
+        try {
+          const { data } = await api.get('/code/submissions', {
+            params: { problem_id: problem.id },
+            timeout: CODE_JUDGE_TIMEOUT_MS,
+          })
+          const nextSubmissions = Array.isArray(data) ? data : []
+          setSubmissions(nextSubmissions)
+          const latest = nextSubmissions[0]
+          if (!latest || latest.id === previousLatestId) continue
+
+          const { data: detail } = await api.get(`/code/submissions/${latest.id}`, { timeout: CODE_JUDGE_TIMEOUT_MS })
+          setResultMode('submit')
+          setResult({
+            submission_id: detail.id,
+            status: detail.status,
+            passed_count: detail.passed_count,
+            total_count: detail.total_count,
+            results: detail.results || [],
+          })
+          return true
+        } catch {
+          // Keep polling; the backend may still be finishing a long Judge0 run.
+        }
+      }
+      return false
+    },
+    [problem?.id],
+  )
+
+  const handleSourceCodeChange = useCallback((value) => {
+    setSourceCode(value)
+    setCodeByLanguage((current) => ({
+      ...current,
+      [languageRef.current]: value,
+    }))
+  }, [])
+
+  const handleLanguageChange = (nextLanguage) => {
+    if (nextLanguage === language) return
+    const nextCodeByLanguage = {
+      ...codeByLanguage,
+      [language]: sourceCode,
+    }
+    const nextSourceCode = nextCodeByLanguage[nextLanguage] ?? problem?.starter_code?.[nextLanguage] ?? ''
+    languageRef.current = nextLanguage
+    setCodeByLanguage({
+      ...nextCodeByLanguage,
+      [nextLanguage]: nextSourceCode,
+    })
+    setLanguage(nextLanguage)
+    setSourceCode(nextSourceCode)
+  }
+
+  const resetStarter = () => {
+    const starterCode = problem?.starter_code?.[language] || ''
+    setSourceCode(starterCode)
+    setCodeByLanguage((current) => ({
+      ...current,
+      [language]: starterCode,
+    }))
+    setResult(null)
+    setResultMode('')
+  }
+
+  const runCode = async () => {
+    if (!problem) return
+    setRunning(true)
+    setResultMode('run')
+    setResult(null)
+    try {
+      const { data } = await api.post(
+        `/code/problems/${problem.id}/run`,
+        {
+          language,
+          source_code: sourceCode,
+        },
+        { timeout: CODE_JUDGE_TIMEOUT_MS },
+      )
+      setResult(data)
+      toast(data.status === 'Accepted' ? '样例已通过' : '样例运行完成', data.status === 'Accepted' ? 'success' : 'warning')
+    } catch (error) {
+      const message = getErrorMessage(error)
+      setResult({
+        status: 'Judge Error',
+        passed_count: 0,
+        total_count: problem.sample_count || 0,
+        results: [
+          {
+            ...CODE_CLIENT_ERROR_RESULT,
+            message,
+          },
+        ],
+      })
+      toast(message, 'error')
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const submitCode = async () => {
+    if (!problem) return
+    const previousLatestId = submissions[0]?.id
+    setSubmitting(true)
+    setResultMode('submit')
+    setResult(null)
+    try {
+      const { data } = await api.post(
+        `/code/problems/${problem.id}/submit`,
+        {
+          language,
+          source_code: sourceCode,
+        },
+        { timeout: CODE_JUDGE_TIMEOUT_MS },
+      )
+      setResult(data)
+      await refreshSubmissions()
+      toast(data.status === 'Accepted' ? '提交通过' : `提交结果：${data.status}`, data.status === 'Accepted' ? 'success' : 'warning')
+    } catch (error) {
+      const responseStatus = error.response?.status
+      const canSyncFromHistory =
+        error.code === 'ECONNABORTED' ||
+        !error.response ||
+        responseStatus === 408 ||
+        responseStatus === 499 ||
+        responseStatus >= 500
+      const synced = canSyncFromHistory ? await syncLatestSubmissionResult(previousLatestId) : false
+      if (synced) {
+        toast('提交已完成，结果已从历史同步', 'warning')
+      } else {
+        const message = getErrorMessage(error)
+        setResult({
+          status: 'Judge Error',
+          passed_count: 0,
+          total_count: problem.test_count || 0,
+          results: [
+            {
+              ...CODE_CLIENT_ERROR_RESULT,
+              message,
+            },
+          ],
+        })
+        toast(message, 'error')
+        await refreshSubmissions()
+      }
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="page code-page enter-page">
+        <EmptyState text="正在加载题目" loading />
+      </div>
+    )
+  }
+
+  if (!problem) {
+    return (
+      <div className="page code-page enter-page">
+        <EmptyState text="没有找到这道题" />
+      </div>
+    )
+  }
+
+  const busy = running || submitting
+
+  return (
+    <div className="page code-detail-page enter-page">
+      <button type="button" className="inline-link code-back-link" onClick={() => navigate('/code')}>
+        <ArrowLeft size={16} />
+        返回题库
+      </button>
+
+      <div className="code-detail-title">
+        <div>
+          <span className="eyebrow">Hot100 / ACM</span>
+          <h1>{problem.title}</h1>
+          <p>{problem.description}</p>
+        </div>
+        <div className="code-title-meta">
+          <span className={`difficulty-badge ${difficultyTone(problem.difficulty)}`}>{problem.difficulty}</span>
+          <span className={`code-status-pill ${problem.solved ? 'accepted' : problem.judgable ? 'ready' : 'draft'}`}>
+            {problem.solved ? '已通过' : problem.judgable ? `${problem.test_count} 组测试` : '暂未开放'}
+          </span>
+        </div>
+      </div>
+
+      <div className="code-detail-grid">
+        <article className="code-problem-statement">
+          <CodeStatementBlock title="输入格式" text={problem.input_format} />
+          <CodeStatementBlock title="输出格式" text={problem.output_format} />
+          <section className="code-statement-block">
+            <h2>样例</h2>
+            <div className="code-sample-list">
+              {(problem.samples || []).map((sample, index) => (
+                <div className="code-sample" key={`${problem.id}-sample-${index}`}>
+                  <span>Sample {index + 1}</span>
+                  <pre>{sample.input || '(空输入)'}</pre>
+                  <pre>{sample.output || '(空输出)'}</pre>
+                  {sample.explanation && <p>{sample.explanation}</p>}
+                </div>
+              ))}
+            </div>
+          </section>
+          <section className="code-statement-block">
+            <h2>约束</h2>
+            <ul className="code-constraints">
+              {(problem.constraints || []).map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </section>
+          <section className="code-statement-block">
+            <h2>主题</h2>
+            <div className="chip-list compact">
+              {problem.tags.map((item) => (
+                <span className="chip passive" key={item}>
+                  {item}
+                </span>
+              ))}
+            </div>
+          </section>
+        </article>
+
+        <aside className="code-editor-panel">
+          <div className="code-editor-toolbar">
+            <FilterSelect
+              ariaLabel="选择代码语言"
+              value={language}
+              options={languageOptions}
+              onChange={handleLanguageChange}
+            />
+            <button type="button" className="button ghost small" onClick={resetStarter} disabled={busy}>
+              重置模板
+            </button>
+          </div>
+          <CodeMirror
+            className="code-editor-shell"
+            value={sourceCode}
+            minHeight="460px"
+            basicSetup={{
+              autocompletion: true,
+              bracketMatching: true,
+              closeBrackets: true,
+              foldGutter: true,
+              highlightActiveLine: true,
+              highlightSelectionMatches: true,
+              lineNumbers: true,
+              searchKeymap: true,
+            }}
+            extensions={editorExtensions}
+            onChange={handleSourceCodeChange}
+            aria-label="代码编辑器"
+          />
+          <div className="code-action-row">
+            <button type="button" className="button ghost grow" onClick={runCode} disabled={busy || !problem.sample_count}>
+              {running ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />}
+              {running ? '正在运行样例' : '运行样例'}
+            </button>
+            <button type="button" className="button primary grow" onClick={submitCode} disabled={busy || !problem.judgable}>
+              {submitting ? <LoaderCircle className="spin" size={16} /> : <Trophy size={16} />}
+              {submitting ? '正在提交判题' : '正式提交'}
+            </button>
+          </div>
+
+          <CodeResultPanel result={result} mode={resultMode} loadingText={running ? '正在运行样例' : submitting ? '正在提交判题' : ''} />
+
+          <section className="code-submission-panel">
+            <div className="code-section-head compact">
+              <div>
+                <h2>提交历史</h2>
+                <p>最近 80 次正式提交。</p>
+              </div>
+            </div>
+            {submissions.length ? (
+              <div className="code-submission-list">
+                {submissions.map((item) => (
+                  <div className="code-submission-row" key={item.id}>
+                    <span className={`code-status-dot ${statusTone(item.status)}`} />
+                    <strong>{CODE_STATUS_TEXT[item.status] || item.status}</strong>
+                    <span>{languageLabel(item.language)}</span>
+                    <span>
+                      {item.passed_count}/{item.total_count}
+                    </span>
+                    <span>{formatDateTime(item.created_at)}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState text="这道题还没有提交记录" compact />
+            )}
+          </section>
+        </aside>
+      </div>
+    </div>
+  )
+}
+
+function CodeStatementBlock({ title, text }) {
+  return (
+    <section className="code-statement-block">
+      <h2>{title}</h2>
+      <p>{text}</p>
+    </section>
+  )
+}
+
+function CodeResultPanel({ result, mode, loadingText }) {
+  const isLoading = Boolean(loadingText)
+  return (
+    <section className="code-result-panel" aria-live="polite">
+      <div className="code-section-head compact">
+        <div>
+          <h2>{mode === 'submit' ? '提交结果' : '运行结果'}</h2>
+          <p>隐藏用例只显示通过情况与错误摘要。</p>
+        </div>
+      </div>
+      {isLoading ? (
+        <EmptyState text={loadingText} loading compact />
+      ) : result ? (
+        <>
+          <div className={`code-result-summary ${statusTone(result.status)}`}>
+            <strong>{CODE_STATUS_TEXT[result.status] || result.status}</strong>
+            <span>
+              {result.passed_count}/{result.total_count} passed
+            </span>
+          </div>
+          <div className="code-case-list">
+            {(result.results || []).map((item) => (
+              <div className={`code-case ${item.passed ? 'passed' : 'failed'}`} key={`${item.index}-${item.status}`}>
+                <div className="code-case-head">
+                  <strong>{item.is_sample ? `样例 ${item.index}` : `测试 ${item.index}`}</strong>
+                  <span>{item.passed ? '通过' : item.status}</span>
+                </div>
+                {item.message && <p>{item.message}</p>}
+                {item.input !== null && item.input !== undefined && (
+                  <pre>
+                    <b>输入</b>
+                    {item.input || '(空输入)'}
+                  </pre>
+                )}
+                {item.expected_output !== null && item.expected_output !== undefined && (
+                  <pre>
+                    <b>期望</b>
+                    {item.expected_output || '(空输出)'}
+                  </pre>
+                )}
+                {item.actual_output !== null && item.actual_output !== undefined && (
+                  <pre>
+                    <b>实际</b>
+                    {item.actual_output || '(空输出)'}
+                  </pre>
+                )}
+                {(item.stderr || item.compile_output) && (
+                  <pre>
+                    <b>错误</b>
+                    {item.compile_output || item.stderr}
+                  </pre>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <EmptyState text="运行或提交后，这里会稳定展示判题结果" compact />
+      )}
+    </section>
+  )
+}
+
 function PageHeader({ eyebrow, title, subtitle, action }) {
   return (
     <header className="page-header">
@@ -2754,8 +3487,20 @@ function difficultyTone(value) {
   return 'medium'
 }
 
+function languageLabel(value) {
+  return CODE_LANGUAGE_OPTIONS.find((item) => item.value === value)?.label || value
+}
+
+function statusTone(value) {
+  if (value === 'Accepted') return 'accepted'
+  if (value === 'Compile Error' || value === 'Runtime Error' || value === 'Time Limit Exceeded' || value === 'Judge Error') return 'error'
+  if (value === 'Wrong Answer') return 'wrong'
+  return 'ready'
+}
+
 function routeName(pathname) {
   if (pathname.startsWith('/dashboard')) return '模拟面试'
+  if (pathname.startsWith('/code')) return '代码练习'
   if (pathname.startsWith('/profile')) return '能力历史'
   if (pathname.startsWith('/report')) return '评估报告'
   return '工作台'

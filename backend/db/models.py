@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, Float, ForeignKey, TIMESTAMP
+from sqlalchemy import Boolean, Column, Integer, String, Text, Float, ForeignKey, TIMESTAMP
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from db.database import Base
@@ -93,3 +93,65 @@ class VoiceMetrics(Base):
     volume_std = Column(Float)
     raw_json = Column(Text)  # 完整 VoiceMetrics dict（含 segments、filler 明细）
     created_at = Column(TIMESTAMP, default=datetime.utcnow)
+
+
+class CodeProblem(Base):
+    __tablename__ = "code_problems"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(120), nullable=False)
+    slug = Column(String(120), unique=True, index=True, nullable=False)
+    difficulty = Column(String(20), nullable=False)
+    tags = Column(Text, nullable=False)
+    description = Column(Text, nullable=False)
+    input_format = Column(Text, nullable=False)
+    output_format = Column(Text, nullable=False)
+    samples = Column(Text, nullable=False)
+    constraints = Column(Text, nullable=False)
+    starter_code = Column(Text, nullable=False)
+    source = Column(String(50), default="Hot100")
+    is_active = Column(Boolean, default=True)
+    order_index = Column(Integer, default=0)
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    test_cases = relationship("CodeTestCase", back_populates="problem", cascade="all, delete-orphan")
+    submissions = relationship("CodeSubmission", back_populates="problem")
+
+
+class CodeTestCase(Base):
+    __tablename__ = "code_test_cases"
+
+    id = Column(Integer, primary_key=True, index=True)
+    problem_id = Column(Integer, ForeignKey("code_problems.id", ondelete="CASCADE"), nullable=False, index=True)
+    input = Column(Text, nullable=False)
+    expected_output = Column(Text, nullable=False)
+    is_sample = Column(Boolean, default=False)
+    explanation = Column(Text, nullable=True)
+    sort_order = Column(Integer, default=0)
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+
+    problem = relationship("CodeProblem", back_populates="test_cases")
+
+
+class CodeSubmission(Base):
+    __tablename__ = "code_submissions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    problem_id = Column(Integer, ForeignKey("code_problems.id", ondelete="CASCADE"), nullable=False, index=True)
+    language = Column(String(30), nullable=False)
+    source_code = Column(Text, nullable=False)
+    status = Column(String(40), nullable=False)
+    runtime = Column(Float, nullable=True)
+    memory = Column(Integer, nullable=True)
+    passed_count = Column(Integer, default=0)
+    total_count = Column(Integer, default=0)
+    stdout = Column(Text, nullable=True)
+    stderr = Column(Text, nullable=True)
+    compile_output = Column(Text, nullable=True)
+    result_json = Column(Text, nullable=True)
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+
+    user = relationship("User")
+    problem = relationship("CodeProblem", back_populates="submissions")

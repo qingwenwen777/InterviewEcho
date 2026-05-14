@@ -224,9 +224,205 @@ if [ ! -f "$release_dir/backend/main.py" ]; then
   exit 1
 fi
 
+compose() {
+  if docker compose version >/dev/null 2>&1; then
+    docker compose "$@"
+  else
+    docker-compose "$@"
+  fi
+}
+
+ensure_backend_env_judge0() {
+  local env_file="$remote_root/shared/backend.env"
+  touch "$env_file"
+  grep -q '^JUDGE0_BASE_URL=' "$env_file" || echo 'JUDGE0_BASE_URL=http://127.0.0.1:2358' >> "$env_file"
+  grep -q '^JUDGE0_TIMEOUT_SECONDS=' "$env_file" || echo 'JUDGE0_TIMEOUT_SECONDS=8' >> "$env_file"
+  grep -q '^JUDGE0_POLL_INTERVAL_SECONDS=' "$env_file" || echo 'JUDGE0_POLL_INTERVAL_SECONDS=0.8' >> "$env_file"
+  grep -q '^JUDGE0_MAX_POLL_ATTEMPTS=' "$env_file" || echo 'JUDGE0_MAX_POLL_ATTEMPTS=30' >> "$env_file"
+  grep -q '^CODE_MAX_SOURCE_LENGTH=' "$env_file" || echo 'CODE_MAX_SOURCE_LENGTH=20000' >> "$env_file"
+  grep -q '^CODE_MAX_TEST_CASES=' "$env_file" || echo 'CODE_MAX_TEST_CASES=30' >> "$env_file"
+  grep -q '^CODE_OUTPUT_LIMIT=' "$env_file" || echo 'CODE_OUTPUT_LIMIT=4000' >> "$env_file"
+}
+
+ensure_judge0() {
+  local judge_root="$remote_root/shared/judge0"
+  local project_name="interviewecho-judge0"
+  local release_dir_name="judge0-v1.13.1"
+  local release_url="https://github.com/judge0/judge0/releases/download/v1.13.1/judge0-v1.13.1.zip"
+
+  apply_judge0_limits() {
+    update_container_limit() {
+      local service="$1"
+      local cpus="$2"
+      local memory="$3"
+      local swap="$4"
+      container_id="$(cd "$judge_root" && compose -p "$project_name" ps -q "$service" 2>/dev/null || true)"
+      if [ -n "$container_id" ]; then
+        docker update --cpus "$cpus" --memory "$memory" --memory-swap "$swap" "$container_id" >/dev/null 2>&1 || true
+      fi
+    }
+
+    update_container_limit server 1.0 512m 768m
+    update_container_limit worker 3.0 2048m 2560m
+    update_container_limit workers 3.0 2048m 2560m
+    update_container_limit db 1.0 1024m 1280m
+    update_container_limit redis 0.5 256m 384m
+  }
+
+  if curl -fsS http://127.0.0.1:2358/system_info >/dev/null 2>&1; then
+    local judge_conf_changed="0"
+    ensure_conf_value() {
+      local key="$1"
+      local value="$2"
+      local current=""
+      if [ -f "$judge_root/judge0.conf" ]; then
+        current="$(grep "^${key}=" "$judge_root/judge0.conf" | tail -n 1 | cut -d= -f2- || true)"
+      fi
+      if [ "$current" != "$value" ]; then
+        if grep -q "^${key}=" "$judge_root/judge0.conf"; then
+          sed -i "s|^${key}=.*|${key}=${value}|" "$judge_root/judge0.conf"
+        else
+          echo "${key}=${value}" >> "$judge_root/judge0.conf"
+        fi
+        judge_conf_changed="1"
+      fi
+    }
+    if [ -f "$judge_root/judge0.conf" ]; then
+      ensure_conf_value MAX_CPU_TIME_LIMIT "16"
+      ensure_conf_value MAX_WALL_TIME_LIMIT "40"
+    fi
+    if [ "$judge_conf_changed" = "1" ]; then
+      echo "Judge0 config changed; restarting Judge0 server and workers..."
+      for service in server worker workers; do
+        if [ -n "$(cd "$judge_root" && compose -p "$project_name" ps -q "$service" 2>/dev/null || true)" ]; then
+          (cd "$judge_root" && compose -p "$project_name" restart "$service")
+        fi
+      done
+      judge_healthy="0"
+      for _ in $(seq 1 45); do
+        if curl -fsS http://127.0.0.1:2358/system_info >/dev/null 2>&1; then
+          judge_healthy="1"
+          break
+        fi
+        sleep 2
+      done
+      if [ "$judge_healthy" != "1" ]; then
+        echo "Judge0 health check failed after config restart." >&2
+        exit 1
+      fi
+    fi
+    echo "Judge0 is already healthy on 127.0.0.1:2358."
+    apply_judge0_limits
+    return
+  fi
+
+  if [ "$(stat -fc %T /sys/fs/cgroup 2>/dev/null || true)" = "cgroup2fs" ]; then
+    echo "Judge0 CE v1.13.1 requires the host to boot with cgroup v1/hybrid mode." >&2
+    echo "Add systemd.unified_cgroup_hierarchy=0 cgroup_enable=memory swapaccount=1 to GRUB, run update-grub, then reboot." >&2
+    exit 1
+  fi
+
+  if ss -ltn | awk '{print $4}' | grep -E '(^|:)2358$' >/dev/null 2>&1; then
+    echo "Port 2358 is already in use but Judge0 health check failed. Refusing to continue." >&2
+    exit 1
+  fi
+
+  mkdir -p "$judge_root"
+  local needs_download="0"
+  if [ ! -f "$judge_root/docker-compose.yml" ] || [ ! -f "$judge_root/judge0.conf" ]; then
+    needs_download="1"
+  elif ! grep -q 'judge0/judge0:1\.13\.1' "$judge_root/docker-compose.yml"; then
+    echo "Existing Judge0 files are not v1.13.1; refreshing Judge0 CE bundle..."
+    needs_download="1"
+  fi
+
+  if [ "$needs_download" = "1" ]; then
+    echo "Downloading Judge0 CE v1.13.1..."
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+    curl -fsSL "$release_url" -o "$tmp_dir/judge0.zip"
+    python3 - "$tmp_dir/judge0.zip" "$tmp_dir" <<'PY'
+import sys
+import zipfile
+
+zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])
+PY
+    cp -a "$tmp_dir"/"$release_dir_name"/. "$judge_root/"
+    rm -rf "$tmp_dir"
+  fi
+
+  sed -i -E "s/\"2358:2358\"/\"127.0.0.1:2358:2358\"/g" "$judge_root/docker-compose.yml"
+  sed -i -E "s/'2358:2358'/'127.0.0.1:2358:2358'/g" "$judge_root/docker-compose.yml"
+
+  set_conf() {
+    local key="$1"
+    local value="$2"
+    if grep -q "^${key}=" "$judge_root/judge0.conf"; then
+      sed -i "s|^${key}=.*|${key}=${value}|" "$judge_root/judge0.conf"
+    else
+      echo "${key}=${value}" >> "$judge_root/judge0.conf"
+    fi
+  }
+
+  make_secret() {
+    if command -v openssl >/dev/null 2>&1; then
+      openssl rand -hex 24
+    else
+      date +%s%N | sha256sum | awk '{print $1}'
+    fi
+  }
+
+  if ! grep -q '^REDIS_PASSWORD=.\+' "$judge_root/judge0.conf"; then
+    set_conf REDIS_PASSWORD "$(make_secret)"
+  fi
+  if ! grep -q '^POSTGRES_PASSWORD=.\+' "$judge_root/judge0.conf"; then
+    set_conf POSTGRES_PASSWORD "$(make_secret)"
+  fi
+  set_conf ALLOW_IP ""
+  set_conf COUNT "2"
+  set_conf MAX_QUEUE_SIZE "24"
+  set_conf CPU_TIME_LIMIT "2"
+  set_conf MAX_CPU_TIME_LIMIT "16"
+  set_conf WALL_TIME_LIMIT "6"
+  set_conf MAX_WALL_TIME_LIMIT "40"
+  set_conf MEMORY_LIMIT "128000"
+  set_conf MAX_MEMORY_LIMIT "512000"
+  set_conf MAX_PROCESSES_AND_OR_THREADS "64"
+  set_conf MAX_MAX_PROCESSES_AND_OR_THREADS "96"
+  set_conf ENABLE_NETWORK "false"
+  set_conf ALLOW_ENABLE_NETWORK "false"
+  set_conf USE_DOCS_AS_HOMEPAGE "false"
+
+  echo "Starting Judge0 Docker Compose..."
+  (cd "$judge_root" && compose -p "$project_name" up -d db redis)
+  sleep 10
+  (cd "$judge_root" && compose -p "$project_name" up -d)
+
+  apply_judge0_limits
+
+  if ss -ltn | awk '{print $4}' | grep -E '(^0\.0\.0\.0:2358$|^\[::\]:2358$)' >/dev/null 2>&1; then
+    echo "Judge0 is listening publicly on 2358; expected localhost-only binding." >&2
+    exit 1
+  fi
+
+  judge_healthy="0"
+  for _ in $(seq 1 45); do
+    if curl -fsS http://127.0.0.1:2358/system_info >/dev/null 2>&1; then
+      judge_healthy="1"
+      break
+    fi
+    sleep 2
+  done
+  if [ "$judge_healthy" != "1" ]; then
+    echo "Judge0 health check failed after startup." >&2
+    (cd "$judge_root" && compose -p "$project_name" ps || true)
+    exit 1
+  fi
+}
+
 if [ "$skip_deps" != "1" ]; then
   echo "Installing backend dependencies..."
-  sed 's/^numpy==2\.4\.3$/numpy==2.2.6/' "$release_dir/backend/requirements.txt" > "$remote_root/shared/requirements.deploy.txt"
+  tr -d '\r' < "$release_dir/backend/requirements.txt" | sed 's/^numpy==2\.4\.3$/numpy==2.2.6/' > "$remote_root/shared/requirements.deploy.txt"
   "$remote_root/shared/venv/bin/pip" install -r "$remote_root/shared/requirements.deploy.txt"
 else
   echo "Skipping backend dependency install."
@@ -309,6 +505,30 @@ else
   echo "$new_hash" > "$release_dir/backend/rag/.source_hash"
 fi
 
+ensure_backend_env_judge0
+ensure_judge0
+
+echo "Refreshing database schema and Hot100 seed data..."
+cd "$release_dir/backend"
+if [ -f "$remote_root/shared/backend.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$remote_root/shared/backend.env"
+  set +a
+fi
+"$remote_root/shared/venv/bin/python" - <<'PY'
+from db import models
+from db.database import SessionLocal, engine
+from db.seed_code_problems import seed_code_problems
+
+models.Base.metadata.create_all(bind=engine)
+db = SessionLocal()
+try:
+    seed_code_problems(db)
+finally:
+    db.close()
+PY
+
 ln -sfn "$release_dir" "$remote_root/current"
 
 systemctl restart interviewecho-backend
@@ -328,7 +548,8 @@ docker run -d \
 healthy="0"
 for _ in $(seq 1 30); do
   if curl -fsS -I http://127.0.0.1:18080/ >/dev/null 2>&1 \
-    && curl -fsS http://127.0.0.1:18080/api/interview/roles >/dev/null 2>&1; then
+    && curl -fsS http://127.0.0.1:18080/api/interview/roles >/dev/null 2>&1 \
+    && curl -fsS http://127.0.0.1:2358/system_info >/dev/null 2>&1; then
     healthy="1"
     break
   fi

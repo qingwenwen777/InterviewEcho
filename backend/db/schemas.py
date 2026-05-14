@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 class UserCreate(BaseModel):
@@ -103,3 +103,84 @@ class EvaluationDetail(BaseModel):
 class VoiceResponse(BaseModel):
     transcription: str
     ai_message: MessageResponse
+
+
+class CodeProblemListItem(BaseModel):
+    id: int
+    title: str
+    slug: str
+    difficulty: str
+    tags: List[str]
+    source: str = "Hot100"
+    solved: bool = False
+    judgable: bool = False
+    sample_count: int = 0
+    test_count: int = 0
+
+
+class CodeProblemDetail(CodeProblemListItem):
+    description: str
+    input_format: str
+    output_format: str
+    samples: List[Dict[str, Any]]
+    constraints: List[str]
+    starter_code: Dict[str, str]
+
+
+class CodeProblemListResponse(BaseModel):
+    items: List[CodeProblemListItem]
+    tags: List[str]
+    total: int
+
+
+class CodeRunRequest(BaseModel):
+    language: str
+    source_code: str
+
+
+class CodeCaseResult(BaseModel):
+    index: int
+    is_sample: bool
+    passed: bool
+    status: str
+    status_description: Optional[str] = None
+    input: Optional[str] = None
+    expected_output: Optional[str] = None
+    actual_output: Optional[str] = None
+    stderr: Optional[str] = None
+    compile_output: Optional[str] = None
+    runtime: Optional[float] = None
+    memory: Optional[int] = None
+    message: Optional[str] = None
+
+
+class CodeRunResponse(BaseModel):
+    status: str
+    passed_count: int
+    total_count: int
+    results: List[CodeCaseResult]
+
+
+class CodeSubmitResponse(CodeRunResponse):
+    submission_id: int
+
+
+class CodeSubmissionItem(BaseModel):
+    id: int
+    problem_id: int
+    problem_title: Optional[str] = None
+    language: str
+    status: str
+    runtime: Optional[float] = None
+    memory: Optional[int] = None
+    passed_count: int
+    total_count: int
+    created_at: datetime
+
+
+class CodeSubmissionDetail(CodeSubmissionItem):
+    source_code: str
+    stdout: Optional[str] = None
+    stderr: Optional[str] = None
+    compile_output: Optional[str] = None
+    results: Optional[List[CodeCaseResult]] = None
