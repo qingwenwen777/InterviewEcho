@@ -129,10 +129,18 @@ const CODE_EDITOR_THEME = EditorView.theme(
       color: '#fffdf7',
     },
     '.cm-activeLine': {
-      backgroundColor: 'rgba(255, 253, 247, 0.045)',
+      backgroundColor: 'rgba(255, 253, 247, 0.035)',
     },
     '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': {
-      backgroundColor: 'rgba(255, 253, 247, 0.22)',
+      backgroundColor: 'rgba(232, 214, 166, 0.82)',
+    },
+    '.cm-selectionMatch': {
+      backgroundColor: 'rgba(232, 214, 166, 0.24)',
+      outline: '1px solid rgba(232, 214, 166, 0.42)',
+    },
+    '.cm-content ::selection': {
+      backgroundColor: 'rgba(232, 214, 166, 0.92)',
+      color: '#111',
     },
     '&.cm-focused': {
       outline: 'none',
@@ -3144,6 +3152,7 @@ function CodeProblemPage() {
               autocompletion: true,
               bracketMatching: true,
               closeBrackets: true,
+              drawSelection: false,
               foldGutter: true,
               highlightActiveLine: true,
               highlightSelectionMatches: true,
@@ -3431,8 +3440,8 @@ function StatCard({ icon, label, value, compact }) {
 
 function EmptyState({ text, loading = false, compact = false }) {
   return (
-    <div className={`empty-state ${compact ? 'compact' : ''}`}>
-      {loading ? <LoaderCircle className="spin" size={22} /> : <Sparkles size={22} />}
+    <div className={`empty-state ${loading ? 'loading' : ''} ${compact ? 'compact' : ''}`}>
+      {loading && <LoaderCircle className="spin" size={22} />}
       <span>{text}</span>
     </div>
   )
