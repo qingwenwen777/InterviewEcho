@@ -1,68 +1,111 @@
-import os
 import json
-import numpy as np
-from openai import OpenAI
+import os
+import re
+
 from dotenv import load_dotenv
+from openai import OpenAI
+
+from core.config import settings
 
 load_dotenv()
 
-# Configuration
 KNOWLEDGE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "knowledge-base"))
 OUTPUT_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "rag", "vector_index.json"))
+MAX_EMBEDDING_CHARS = int(os.getenv("RAG_EMBEDDING_MAX_CHARS", "7000"))
+CHUNK_OVERLAP_CHARS = int(os.getenv("RAG_CHUNK_OVERLAP_CHARS", "300"))
 
-# Setup Client
-LLM_API_KEY = os.getenv("LLM_API_KEY", "")
-from core.config import settings
-client = OpenAI(api_key=settings.LLM_API_KEY, base_url=settings.LLM_BASE_URL)
 
-def get_embedding(text):
+def split_for_embedding(text, max_chars=MAX_EMBEDDING_CHARS, overlap=CHUNK_OVERLAP_CHARS):
+    text = text.strip()
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [text]
+
+    chunks = []
+    current = []
+    current_len = 0
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", text) if part.strip()]
+
+    def flush_current():
+        nonlocal current, current_len
+        if current:
+            chunks.append("\n\n".join(current).strip())
+            current = []
+            current_len = 0
+
+    for paragraph in paragraphs:
+        if len(paragraph) > max_chars:
+            flush_current()
+            step = max(1, max_chars - overlap)
+            for start in range(0, len(paragraph), step):
+                segment = paragraph[start:start + max_chars].strip()
+                if segment:
+                    chunks.append(segment)
+            continue
+
+        separator_len = 2 if current else 0
+        if current and current_len + separator_len + len(paragraph) > max_chars:
+            flush_current()
+            separator_len = 0
+
+        current.append(paragraph)
+        current_len += separator_len + len(paragraph)
+
+    flush_current()
+    return chunks
+
+
+def get_embedding(client, text):
     print(f"Embedding: {text[:30]}...")
     resp = client.embeddings.create(input=text, model=settings.LLM_EMBEDDING_MODEL)
     return resp.data[0].embedding
 
-def build_index():
-    print("开始构建便携式 RAG 索引...")
-    if not LLM_API_KEY:
-        print("错误: 请先在 .env 中设置 LLM_API_KEY")
-        return
 
+def collect_documents():
     documents = []
-    # 1. Traverse knowledge-base
     for root, _, files in os.walk(KNOWLEDGE_DIR):
-        for file in files:
-            if file.endswith('.md') and file != 'README.md':
-                path = os.path.join(root, file)
-                print(f"正在处理: {file}")
-                with open(path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                    # Simple chunking by paragraph for now or specific headers
-                    chunks = content.split('###')
-                    for chunk in chunks:
-                        if chunk.strip():
-                            documents.append(chunk.strip())
-            elif file.endswith('.json'):
-                path = os.path.join(root, file)
-                print(f"正在读取题库: {file}")
-                with open(path, 'r', encoding='utf-8') as f:
+        for file in sorted(files):
+            path = os.path.join(root, file)
+            if file.endswith(".md") and file != "README.md":
+                print(f"Processing: {file}")
+                with open(path, "r", encoding="utf-8") as f:
+                    for chunk in f.read().split("###"):
+                        documents.extend(split_for_embedding(chunk))
+            elif file.endswith(".json"):
+                print(f"Reading question bank: {file}")
+                with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     for item in data:
-                        q_str = f"岗位: {item.get('role', '通用')}\n题目: {item.get('question')}\n要点: {', '.join(item.get('expected_points', []))}"
-                        documents.append(q_str)
+                        q_str = (
+                            f"Role: {item.get('role', 'general')}\n"
+                            f"Question: {item.get('question')}\n"
+                            f"Key points: {', '.join(item.get('expected_points', []))}"
+                        )
+                        documents.extend(split_for_embedding(q_str))
+    return documents
 
-    # 2. Generate Embeddings
+
+def build_index():
+    print("Building portable RAG index...")
+    if not settings.LLM_API_KEY:
+        print("Error: please set LLM_API_KEY in .env")
+        return
+
+    client = OpenAI(api_key=settings.LLM_API_KEY, base_url=settings.LLM_BASE_URL)
     index_data = []
-    for doc in documents:
+    for doc in collect_documents():
         try:
-            vec = get_embedding(doc)
+            vec = get_embedding(client, doc)
             index_data.append({"content": doc, "embedding": vec})
         except Exception as e:
             print(f"Skip failed doc: {e}")
 
-    # 3. Save to JSON
-    with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         json.dump(index_data, f, ensure_ascii=False, indent=2)
-    
-    print(f"索引构建完成! 共 {len(index_data)} 条记录，保存在 {OUTPUT_FILE}")
+
+    print(f"Index build complete. {len(index_data)} records saved to {OUTPUT_FILE}")
+
 
 if __name__ == "__main__":
     build_index()
