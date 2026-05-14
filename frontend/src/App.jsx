@@ -141,6 +141,7 @@ const CODE_EDITOR_THEME = EditorView.theme(
   { dark: true },
 )
 const CODE_STATUS_TEXT = {
+  Running: 'Running',
   Accepted: 'Accepted',
   'Wrong Answer': 'Wrong Answer',
   'Compile Error': 'Compile Error',
@@ -149,8 +150,10 @@ const CODE_STATUS_TEXT = {
   'Judge Error': 'Judge Error',
 }
 const CODE_JUDGE_TIMEOUT_MS = 240000
-const CODE_RESULT_SYNC_ATTEMPTS = 24
-const CODE_RESULT_SYNC_INTERVAL_MS = 2500
+const CODE_RESULT_SYNC_ATTEMPTS = 80
+const CODE_RESULT_SYNC_INTERVAL_MS = 2000
+const CODE_PAGE_SIZE = 20
+const CODE_PENDING_STATUSES = new Set(['Running'])
 const CODE_CLIENT_ERROR_RESULT = {
   index: 1,
   is_sample: false,
@@ -162,6 +165,18 @@ const CODE_CLIENT_ERROR_RESULT = {
   stderr: null,
   compile_output: null,
 }
+const wait = (ms) =>
+  new Promise((resolve) => {
+    window.setTimeout(resolve, ms)
+  })
+const isCodeFinalStatus = (status) => Boolean(status) && !CODE_PENDING_STATUSES.has(status)
+const toCodeSubmissionResult = (detail) => ({
+  submission_id: detail.id,
+  status: detail.status,
+  passed_count: detail.passed_count ?? 0,
+  total_count: detail.total_count ?? 0,
+  results: detail.results || [],
+})
 const SECTION_SKELETON_GROUPS = [
   { label: '基础技术', widths: [88, 112, 96, 132] },
   { label: '工程能力', widths: [150, 176, 102, 92] },
@@ -2572,6 +2587,8 @@ function CodePracticePage() {
   const [keyword, setKeyword] = useState('')
   const [difficulty, setDifficulty] = useState('全部')
   const [tag, setTag] = useState('全部')
+  const [problemPage, setProblemPage] = useState(1)
+  const [historyPage, setHistoryPage] = useState(1)
 
   const difficultyOptions = useMemo(
     () => [
@@ -2611,6 +2628,10 @@ function CodePracticePage() {
   }, [difficulty, keyword, tag, toast])
 
   useEffect(() => {
+    setProblemPage(1)
+  }, [difficulty, keyword, tag])
+
+  useEffect(() => {
     let alive = true
     setHistoryLoading(true)
     api
@@ -2631,6 +2652,18 @@ function CodePracticePage() {
 
   const solvedCount = problems.filter((item) => item.solved).length
   const judgableCount = problems.filter((item) => item.judgable).length
+  const problemTotalPages = Math.max(1, Math.ceil(problems.length / CODE_PAGE_SIZE))
+  const visibleProblems = problems.slice((problemPage - 1) * CODE_PAGE_SIZE, problemPage * CODE_PAGE_SIZE)
+  const historyTotalPages = Math.max(1, Math.ceil(submissions.length / CODE_PAGE_SIZE))
+  const visibleHistory = submissions.slice((historyPage - 1) * CODE_PAGE_SIZE, historyPage * CODE_PAGE_SIZE)
+
+  useEffect(() => {
+    setProblemPage((current) => Math.min(current, problemTotalPages))
+  }, [problemTotalPages])
+
+  useEffect(() => {
+    setHistoryPage((current) => Math.min(current, historyTotalPages))
+  }, [historyTotalPages])
 
   return (
     <div className="page code-page enter-page">
@@ -2679,31 +2712,34 @@ function CodePracticePage() {
           {loading ? (
             <EmptyState text="正在整理题库" loading />
           ) : problems.length ? (
-            <div className="code-problem-list">
-              {problems.map((problem) => (
-                <button
-                  type="button"
-                  className={`code-problem-row ${problem.solved ? 'solved' : ''}`}
-                  key={problem.id}
-                  onClick={() => navigate(`/code/problems/${problem.id}`)}
-                >
-                  <span className="code-row-index">{String(problem.id).padStart(2, '0')}</span>
-                  <span className="code-row-main">
-                    <strong>{problem.title}</strong>
-                    <span>
-                      {problem.tags.slice(0, 4).map((item) => (
-                        <em key={`${problem.id}-${item}`}>{item}</em>
-                      ))}
+            <>
+              <div className="code-problem-list">
+                {visibleProblems.map((problem) => (
+                  <button
+                    type="button"
+                    className={`code-problem-row ${problem.solved ? 'solved' : ''}`}
+                    key={problem.id}
+                    onClick={() => navigate(`/code/problems/${problem.id}`)}
+                  >
+                    <span className="code-row-index">{String(problem.id).padStart(2, '0')}</span>
+                    <span className="code-row-main">
+                      <strong>{problem.title}</strong>
+                      <span>
+                        {problem.tags.slice(0, 4).map((item) => (
+                          <em key={`${problem.id}-${item}`}>{item}</em>
+                        ))}
+                      </span>
                     </span>
-                  </span>
-                  <span className={`difficulty-badge ${difficultyTone(problem.difficulty)}`}>{problem.difficulty}</span>
-                  <span className={`code-status-pill ${problem.solved ? 'accepted' : problem.judgable ? 'ready' : 'draft'}`}>
-                    {problem.solved ? '已通过' : problem.judgable ? '可练习' : '占位'}
-                  </span>
-                  <ChevronRight size={17} />
-                </button>
-              ))}
-            </div>
+                    <span className={`difficulty-badge ${difficultyTone(problem.difficulty)}`}>{problem.difficulty}</span>
+                    <span className={`code-status-pill ${problem.solved ? 'accepted' : problem.judgable ? 'ready' : 'draft'}`}>
+                      {problem.solved ? '已通过' : problem.judgable ? '可练习' : '占位'}
+                    </span>
+                    <ChevronRight size={17} />
+                  </button>
+                ))}
+              </div>
+              <CodePagination page={problemPage} totalPages={problemTotalPages} totalCount={problems.length} onChange={setProblemPage} />
+            </>
           ) : (
             <EmptyState text="没有匹配的题目" />
           )}
@@ -2719,22 +2755,25 @@ function CodePracticePage() {
           {historyLoading ? (
             <EmptyState text="正在读取提交历史" loading compact />
           ) : submissions.length ? (
-            <div className="code-history-list">
-              {submissions.slice(0, 10).map((item) => (
-                <button
-                  type="button"
-                  className="code-history-item"
-                  key={item.id}
-                  onClick={() => navigate(`/code/problems/${item.problem_id}`)}
-                >
-                  <span className={`code-status-dot ${statusTone(item.status)}`} />
-                  <strong>{item.problem_title || `题目 ${item.problem_id}`}</strong>
-                  <span>
-                    {languageLabel(item.language)} · {item.passed_count}/{item.total_count} · {formatDateTime(item.created_at)}
-                  </span>
-                </button>
-              ))}
-            </div>
+            <>
+              <div className="code-history-list">
+                {visibleHistory.map((item) => (
+                  <button
+                    type="button"
+                    className="code-history-item"
+                    key={item.id}
+                    onClick={() => navigate(`/code/problems/${item.problem_id}`)}
+                  >
+                    <span className={`code-status-dot ${statusTone(item.status)}`} />
+                    <strong>{item.problem_title || `题目 ${item.problem_id}`}</strong>
+                    <span>
+                      {languageLabel(item.language)} · {item.passed_count}/{item.total_count} · {formatDateTime(item.created_at)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <CodePagination page={historyPage} totalPages={historyTotalPages} totalCount={submissions.length} onChange={setHistoryPage} compact />
+            </>
           ) : (
             <EmptyState text="还没有正式提交" compact />
           )}
@@ -2758,6 +2797,7 @@ function CodeProblemPage() {
   const [submitting, setSubmitting] = useState(false)
   const [result, setResult] = useState(null)
   const [resultMode, setResultMode] = useState('')
+  const [submissionPage, setSubmissionPage] = useState(1)
   const languageRef = useRef(language)
 
   const languageOptions = useMemo(() => CODE_LANGUAGE_OPTIONS, [])
@@ -2814,14 +2854,33 @@ function CodeProblemPage() {
     refreshSubmissions()
   }, [refreshSubmissions])
 
+  useEffect(() => {
+    setSubmissionPage(1)
+  }, [problemId])
+
+  const waitForSubmissionResult = useCallback(async (submissionId) => {
+    let latestResult = null
+    for (let attempt = 0; attempt < CODE_RESULT_SYNC_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) {
+        await wait(CODE_RESULT_SYNC_INTERVAL_MS)
+      }
+      const { data: detail } = await api.get(`/code/submissions/${submissionId}`, { timeout: CODE_JUDGE_TIMEOUT_MS })
+      latestResult = toCodeSubmissionResult(detail)
+      setResultMode('submit')
+      setResult(latestResult)
+      if (isCodeFinalStatus(latestResult.status)) {
+        return latestResult
+      }
+    }
+    return latestResult
+  }, [])
+
   const syncLatestSubmissionResult = useCallback(
     async (previousLatestId) => {
       if (!problem?.id) return false
       for (let attempt = 0; attempt < CODE_RESULT_SYNC_ATTEMPTS; attempt += 1) {
         if (attempt > 0) {
-          await new Promise((resolve) => {
-            window.setTimeout(resolve, CODE_RESULT_SYNC_INTERVAL_MS)
-          })
+          await wait(CODE_RESULT_SYNC_INTERVAL_MS)
         }
         try {
           const { data } = await api.get('/code/submissions', {
@@ -2833,23 +2892,15 @@ function CodeProblemPage() {
           const latest = nextSubmissions[0]
           if (!latest || latest.id === previousLatestId) continue
 
-          const { data: detail } = await api.get(`/code/submissions/${latest.id}`, { timeout: CODE_JUDGE_TIMEOUT_MS })
-          setResultMode('submit')
-          setResult({
-            submission_id: detail.id,
-            status: detail.status,
-            passed_count: detail.passed_count,
-            total_count: detail.total_count,
-            results: detail.results || [],
-          })
-          return true
+          const syncedResult = await waitForSubmissionResult(latest.id)
+          return Boolean(syncedResult)
         } catch {
           // Keep polling; the backend may still be finishing a long Judge0 run.
         }
       }
       return false
     },
-    [problem?.id],
+    [problem?.id, waitForSubmissionResult],
   )
 
   const handleSourceCodeChange = useCallback((value) => {
@@ -2939,6 +2990,24 @@ function CodeProblemPage() {
       )
       setResult(data)
       await refreshSubmissions()
+      if (CODE_PENDING_STATUSES.has(data.status) && data.submission_id) {
+        try {
+          const finalResult = await waitForSubmissionResult(data.submission_id)
+          await refreshSubmissions()
+          if (finalResult && isCodeFinalStatus(finalResult.status)) {
+            toast(
+              finalResult.status === 'Accepted' ? '提交通过' : `提交结果：${finalResult.status}`,
+              finalResult.status === 'Accepted' ? 'success' : 'warning',
+            )
+          } else {
+            toast('判题仍在进行，可稍后在提交历史查看', 'warning')
+          }
+        } catch {
+          await refreshSubmissions()
+          toast('提交已进入判题队列，可稍后在提交历史查看', 'warning')
+        }
+        return
+      }
       toast(data.status === 'Accepted' ? '提交通过' : `提交结果：${data.status}`, data.status === 'Accepted' ? 'success' : 'warning')
     } catch (error) {
       const responseStatus = error.response?.status
@@ -2972,6 +3041,12 @@ function CodeProblemPage() {
     }
   }
 
+  const submissionTotalPages = Math.max(1, Math.ceil(submissions.length / CODE_PAGE_SIZE))
+
+  useEffect(() => {
+    setSubmissionPage((current) => Math.min(current, submissionTotalPages))
+  }, [submissionTotalPages])
+
   if (loading) {
     return (
       <div className="page code-page enter-page">
@@ -2989,6 +3064,7 @@ function CodeProblemPage() {
   }
 
   const busy = running || submitting
+  const visibleSubmissions = submissions.slice((submissionPage - 1) * CODE_PAGE_SIZE, submissionPage * CODE_PAGE_SIZE)
 
   return (
     <div className="page code-detail-page enter-page">
@@ -3099,19 +3175,27 @@ function CodeProblemPage() {
               </div>
             </div>
             {submissions.length ? (
-              <div className="code-submission-list">
-                {submissions.map((item) => (
-                  <div className="code-submission-row" key={item.id}>
-                    <span className={`code-status-dot ${statusTone(item.status)}`} />
-                    <strong>{CODE_STATUS_TEXT[item.status] || item.status}</strong>
-                    <span>{languageLabel(item.language)}</span>
-                    <span>
-                      {item.passed_count}/{item.total_count}
-                    </span>
-                    <span>{formatDateTime(item.created_at)}</span>
-                  </div>
-                ))}
-              </div>
+              <>
+                <div className="code-submission-list">
+                  {visibleSubmissions.map((item) => (
+                    <div className="code-submission-row" key={item.id}>
+                      <span className={`code-status-dot ${statusTone(item.status)}`} />
+                      <strong>{CODE_STATUS_TEXT[item.status] || item.status}</strong>
+                      <span>{languageLabel(item.language)}</span>
+                      <span>
+                        {item.passed_count}/{item.total_count}
+                      </span>
+                      <span>{formatDateTime(item.created_at)}</span>
+                    </div>
+                  ))}
+                </div>
+                <CodePagination
+                  page={submissionPage}
+                  totalPages={submissionTotalPages}
+                  totalCount={submissions.length}
+                  onChange={setSubmissionPage}
+                />
+              </>
             ) : (
               <EmptyState text="这道题还没有提交记录" compact />
             )}
@@ -3128,6 +3212,32 @@ function CodeStatementBlock({ title, text }) {
       <h2>{title}</h2>
       <p>{text}</p>
     </section>
+  )
+}
+
+function CodePagination({ page, totalPages, totalCount, onChange, compact = false }) {
+  if (totalPages <= 1) return null
+  const start = (page - 1) * CODE_PAGE_SIZE + 1
+  const end = Math.min(totalCount, page * CODE_PAGE_SIZE)
+  return (
+    <div className={`code-pagination ${compact ? 'compact' : ''}`}>
+      <span>
+        {start}-{end} / {totalCount}
+      </span>
+      <div>
+        <button type="button" className="button ghost small" onClick={() => onChange(page - 1)} disabled={page <= 1}>
+          <ChevronRight size={16} className="flip-x" aria-hidden="true" />
+          <span className="sr-only">上一页</span>
+        </button>
+        <em>
+          {page}/{totalPages}
+        </em>
+        <button type="button" className="button ghost small" onClick={() => onChange(page + 1)} disabled={page >= totalPages}>
+          <ChevronRight size={16} aria-hidden="true" />
+          <span className="sr-only">下一页</span>
+        </button>
+      </div>
+    </div>
   )
 }
 

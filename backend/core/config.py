@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     JUDGE0_MAX_POLL_ATTEMPTS: int = int(os.getenv("JUDGE0_MAX_POLL_ATTEMPTS", "30"))
     CODE_MAX_SOURCE_LENGTH: int = int(os.getenv("CODE_MAX_SOURCE_LENGTH", "20000"))
     CODE_MAX_TEST_CASES: int = int(os.getenv("CODE_MAX_TEST_CASES", "30"))
+    CODE_MAX_CONCURRENT_JUDGE_CASES: int = int(os.getenv("CODE_MAX_CONCURRENT_JUDGE_CASES", "8"))
     CODE_OUTPUT_LIMIT: int = int(os.getenv("CODE_OUTPUT_LIMIT", "4000"))
 
 settings = Settings()

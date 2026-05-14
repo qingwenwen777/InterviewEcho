@@ -1,12 +1,13 @@
+import asyncio
 import json
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from core.config import settings
 from db import models, schemas
-from db.database import get_db
+from db.database import SessionLocal, get_db
 from services.judge0_service import (
     LANGUAGE_IDS,
     Judge0Unavailable,
@@ -17,6 +18,8 @@ from services.judge0_service import (
 
 
 router = APIRouter()
+
+RUNNING_SUBMISSION_STATUS = "Running"
 
 
 def get_current_user_id(authorization: str = Header(None)):
@@ -138,17 +141,38 @@ async def _run_cases(
     language: str,
     source_code: str,
     include_hidden_details: bool,
-    stop_on_first_failure: bool = False,
+    precheck_first: bool = True,
 ):
     results = []
-    for index, case in enumerate(cases, start=1):
+    indexed_cases = list(enumerate(cases, start=1))
+    if not indexed_cases:
+        return "Wrong Answer", 0, 0, results
+
+    async def run_one(index, case):
         result = await judge0_service.run_code(language, source_code, case.input)
-        payload = _case_payload(index, case, result, include_hidden_details)
-        results.append(payload)
-        if stop_on_first_failure and not payload.passed:
-            break
-        if payload.status in {"Compile Error", "Time Limit Exceeded"} or payload.status.startswith("Runtime"):
-            break
+        return _case_payload(index, case, result, include_hidden_details)
+
+    concurrency = max(1, settings.CODE_MAX_CONCURRENT_JUDGE_CASES)
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def run_limited(index, case):
+        async with semaphore:
+            return await run_one(index, case)
+
+    if precheck_first:
+        first_index, first_case = indexed_cases[0]
+        first_payload = await run_one(first_index, first_case)
+        results.append(first_payload)
+        if first_payload.status in {"Compile Error", "Time Limit Exceeded"} or first_payload.status.startswith("Runtime"):
+            total_count = len(cases)
+            return first_payload.status, 0, total_count, results
+        remaining_cases = indexed_cases[1:]
+        results.extend(await asyncio.gather(*(run_limited(index, case) for index, case in remaining_cases)))
+        results.sort(key=lambda item: item.index)
+    else:
+        results.extend(await asyncio.gather(*(run_limited(index, case) for index, case in indexed_cases)))
+        results.sort(key=lambda item: item.index)
+
     passed_count = sum(1 for item in results if item.passed)
     total_count = len(cases)
     if passed_count == total_count:
@@ -175,6 +199,51 @@ def _submission_summary(results: List[schemas.CodeCaseResult], status: str):
         "compile_output": truncate_text(compile_output),
         "result_json": truncate_text(result_json, settings.CODE_OUTPUT_LIMIT * 3),
     }
+
+
+async def _judge_submission(submission_id: int, case_ids: List[int], language: str, source_code: str):
+    db = SessionLocal()
+    try:
+        cases = (
+            db.query(models.CodeTestCase)
+            .filter(models.CodeTestCase.id.in_(case_ids))
+            .order_by(models.CodeTestCase.sort_order.asc(), models.CodeTestCase.id.asc())
+            .all()
+        )
+        try:
+            status, passed_count, total_count, results = await _run_cases(
+                cases,
+                language,
+                source_code,
+                False,
+                precheck_first=False,
+            )
+            error_message = None
+        except Judge0Unavailable:
+            status, passed_count, total_count, results = "Judge Error", 0, len(cases), []
+            error_message = "判题服务暂时不可用，请稍后重试"
+        except Exception as exc:
+            status, passed_count, total_count, results = "Judge Error", 0, len(cases), []
+            error_message = truncate_text(str(exc))
+
+        summary = _submission_summary(results, status)
+        if error_message and not summary["stderr"]:
+            summary["stderr"] = error_message
+        submission = db.query(models.CodeSubmission).filter(models.CodeSubmission.id == submission_id).first()
+        if not submission:
+            return
+        submission.status = summary["status"]
+        submission.runtime = summary["runtime"]
+        submission.memory = summary["memory"]
+        submission.passed_count = passed_count
+        submission.total_count = total_count
+        submission.stdout = summary["stdout"]
+        submission.stderr = summary["stderr"]
+        submission.compile_output = summary["compile_output"]
+        submission.result_json = summary["result_json"]
+        db.commit()
+    finally:
+        db.close()
 
 
 @router.get("/problems", response_model=schemas.CodeProblemListResponse)
@@ -259,10 +328,13 @@ async def run_problem(
 async def submit_problem(
     problem_id: str,
     payload: schemas.CodeRunRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ):
     problem = _get_problem(db, problem_id)
+    if not db.query(models.User.id).filter(models.User.id == user_id).first():
+        raise HTTPException(status_code=401, detail="Invalid Authorization Token")
     language, source_code = _validate_request(payload)
     cases = (
         db.query(models.CodeTestCase)
@@ -274,46 +346,33 @@ async def submit_problem(
     if not cases:
         raise HTTPException(status_code=400, detail="这道题还在打磨隐藏测试，暂未开放提交")
 
-    try:
-        status, passed_count, total_count, results = await _run_cases(
-            cases,
-            language,
-            source_code,
-            False,
-            stop_on_first_failure=True,
-        )
-    except Judge0Unavailable:
-        status, passed_count, total_count, results = "Judge Error", 0, len(cases), []
-
-    summary = _submission_summary(results, status)
     submission = models.CodeSubmission(
         user_id=user_id,
         problem_id=problem.id,
         language=language,
         source_code=source_code,
-        status=summary["status"],
-        runtime=summary["runtime"],
-        memory=summary["memory"],
-        passed_count=passed_count,
-        total_count=total_count,
-        stdout=summary["stdout"],
-        stderr=summary["stderr"],
-        compile_output=summary["compile_output"],
-        result_json=summary["result_json"],
+        status=RUNNING_SUBMISSION_STATUS,
+        runtime=None,
+        memory=None,
+        passed_count=0,
+        total_count=len(cases),
+        stdout=None,
+        stderr=None,
+        compile_output=None,
+        result_json="[]",
     )
     db.add(submission)
     db.commit()
     db.refresh(submission)
 
-    if status == "Judge Error":
-        raise HTTPException(status_code=503, detail="判题服务暂时不可用，提交记录已保存")
+    background_tasks.add_task(_judge_submission, submission.id, [case.id for case in cases], language, source_code)
 
     return schemas.CodeSubmitResponse(
         submission_id=submission.id,
-        status=status,
-        passed_count=passed_count,
-        total_count=total_count,
-        results=results,
+        status=RUNNING_SUBMISSION_STATUS,
+        passed_count=0,
+        total_count=len(cases),
+        results=[],
     )
 
 

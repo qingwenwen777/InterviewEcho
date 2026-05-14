@@ -235,13 +235,23 @@ compose() {
 ensure_backend_env_judge0() {
   local env_file="$remote_root/shared/backend.env"
   touch "$env_file"
-  grep -q '^JUDGE0_BASE_URL=' "$env_file" || echo 'JUDGE0_BASE_URL=http://127.0.0.1:2358' >> "$env_file"
-  grep -q '^JUDGE0_TIMEOUT_SECONDS=' "$env_file" || echo 'JUDGE0_TIMEOUT_SECONDS=8' >> "$env_file"
-  grep -q '^JUDGE0_POLL_INTERVAL_SECONDS=' "$env_file" || echo 'JUDGE0_POLL_INTERVAL_SECONDS=0.8' >> "$env_file"
-  grep -q '^JUDGE0_MAX_POLL_ATTEMPTS=' "$env_file" || echo 'JUDGE0_MAX_POLL_ATTEMPTS=30' >> "$env_file"
-  grep -q '^CODE_MAX_SOURCE_LENGTH=' "$env_file" || echo 'CODE_MAX_SOURCE_LENGTH=20000' >> "$env_file"
-  grep -q '^CODE_MAX_TEST_CASES=' "$env_file" || echo 'CODE_MAX_TEST_CASES=30' >> "$env_file"
-  grep -q '^CODE_OUTPUT_LIMIT=' "$env_file" || echo 'CODE_OUTPUT_LIMIT=4000' >> "$env_file"
+  set_backend_env() {
+    local key="$1"
+    local value="$2"
+    if grep -q "^${key}=" "$env_file"; then
+      sed -i "s|^${key}=.*|${key}=${value}|" "$env_file"
+    else
+      echo "${key}=${value}" >> "$env_file"
+    fi
+  }
+  set_backend_env JUDGE0_BASE_URL "http://127.0.0.1:2358"
+  set_backend_env JUDGE0_TIMEOUT_SECONDS "12"
+  set_backend_env JUDGE0_POLL_INTERVAL_SECONDS "0.6"
+  set_backend_env JUDGE0_MAX_POLL_ATTEMPTS "90"
+  set_backend_env CODE_MAX_SOURCE_LENGTH "20000"
+  set_backend_env CODE_MAX_TEST_CASES "30"
+  set_backend_env CODE_MAX_CONCURRENT_JUDGE_CASES "8"
+  set_backend_env CODE_OUTPUT_LIMIT "4000"
 }
 
 ensure_judge0() {
@@ -262,10 +272,10 @@ ensure_judge0() {
       fi
     }
 
-    update_container_limit server 1.0 512m 768m
-    update_container_limit worker 3.0 2048m 2560m
-    update_container_limit workers 3.0 2048m 2560m
-    update_container_limit db 1.0 1024m 1280m
+    update_container_limit server 1.5 768m 1024m
+    update_container_limit worker 8.0 6144m 7168m
+    update_container_limit workers 8.0 6144m 7168m
+    update_container_limit db 1.5 1536m 2048m
     update_container_limit redis 0.5 256m 384m
   }
 
@@ -288,8 +298,11 @@ ensure_judge0() {
       fi
     }
     if [ -f "$judge_root/judge0.conf" ]; then
-      ensure_conf_value MAX_CPU_TIME_LIMIT "16"
-      ensure_conf_value MAX_WALL_TIME_LIMIT "40"
+      ensure_conf_value COUNT "8"
+      ensure_conf_value MAX_QUEUE_SIZE "128"
+      ensure_conf_value MAX_CPU_TIME_LIMIT "64"
+      ensure_conf_value MAX_WALL_TIME_LIMIT "160"
+      ensure_conf_value MAX_MEMORY_LIMIT "1024000"
     fi
     if [ "$judge_conf_changed" = "1" ]; then
       echo "Judge0 config changed; restarting Judge0 server and workers..."
@@ -379,14 +392,14 @@ PY
     set_conf POSTGRES_PASSWORD "$(make_secret)"
   fi
   set_conf ALLOW_IP ""
-  set_conf COUNT "2"
-  set_conf MAX_QUEUE_SIZE "24"
+  set_conf COUNT "8"
+  set_conf MAX_QUEUE_SIZE "128"
   set_conf CPU_TIME_LIMIT "2"
-  set_conf MAX_CPU_TIME_LIMIT "16"
+  set_conf MAX_CPU_TIME_LIMIT "64"
   set_conf WALL_TIME_LIMIT "6"
-  set_conf MAX_WALL_TIME_LIMIT "40"
+  set_conf MAX_WALL_TIME_LIMIT "160"
   set_conf MEMORY_LIMIT "128000"
-  set_conf MAX_MEMORY_LIMIT "512000"
+  set_conf MAX_MEMORY_LIMIT "1024000"
   set_conf MAX_PROCESSES_AND_OR_THREADS "64"
   set_conf MAX_MAX_PROCESSES_AND_OR_THREADS "96"
   set_conf ENABLE_NETWORK "false"
