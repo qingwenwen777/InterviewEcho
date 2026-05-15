@@ -1556,16 +1556,37 @@ function InterviewRoom() {
     setSending(true)
     const formData = new FormData()
     formData.append('file', blob, 'voice.webm')
+    let userMessageId = null
     try {
       const { data } = await api.post(`/interview/${interviewId}/voice`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
         timeout: 300000,
       })
-      setMessages((current) => [
-        ...current,
-        { sender: 'user', content: data.transcription, created_at: new Date().toISOString() },
-        data.ai_message,
-      ])
+      const userMessage = data.user_message || { sender: 'user', content: data.transcription, created_at: new Date().toISOString() }
+      userMessageId = userMessage.id || null
+      setMessages((current) => [...current, userMessage])
+      setIsTranscribing(false)
+      if (data.ai_message) {
+        setMessages((current) => [...current, data.ai_message])
+      } else if (userMessageId) {
+        for (let attempt = 0; attempt < 45; attempt += 1) {
+          await wait(1000)
+          const messagesRes = await api.get(`/interview/${interviewId}/messages`)
+          const nextMessages = Array.isArray(messagesRes.data) ? messagesRes.data : []
+          setMessages(nextMessages)
+          const aiReply = nextMessages.find(
+            (message) => message.sender === 'ai' && Number(message.id) > Number(userMessageId),
+          )
+          if (aiReply) {
+            if (aiReply.is_final) {
+              toast('已达到建议轮次，准备生成报告。', 'warning')
+              window.setTimeout(endInterview, 1200)
+            }
+            return
+          }
+        }
+        toast('语音已转写，AI 回复仍在生成中。', 'info')
+      }
       if (data.ai_message?.is_final) {
         toast('已达到建议轮次，准备生成报告。', 'warning')
         window.setTimeout(endInterview, 1200)

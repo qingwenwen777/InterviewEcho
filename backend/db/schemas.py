@@ -102,7 +102,9 @@ class EvaluationDetail(BaseModel):
 
 class VoiceResponse(BaseModel):
     transcription: str
-    ai_message: MessageResponse
+    user_message: Optional[MessageResponse] = None
+    ai_message: Optional[MessageResponse] = None
+    reply_status: str = "processing"
 
 
 class CodeProblemListItem(BaseModel):

@@ -5,6 +5,7 @@ import tempfile
 from services.stt_service import stt_service
 from services.audio_analysis import analyze_audio
 from services.repo_analyzer import analyze_repo
+from core.config import settings
 from core.llm_service import generate_llm_response, evaluate_full_interview, polish_text, generate_repo_questions, generate_study_plan
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
@@ -87,6 +88,53 @@ def _with_forced_question(text: str, question: str, repo_name: str = "") -> str:
         text += "。"
     prefix = f"接下来我想针对你的 GitHub 项目 {repo_name} 深挖一个具体问题：" if repo_name else "接下来我想针对你的 GitHub 项目深挖一个具体问题："
     return f"{text} {prefix}{question}" if text else f"{prefix}{question}"
+
+
+def _is_skip_or_boundary_answer(content: str) -> bool:
+    text = (content or "").strip().lower()
+    compact = "".join(text.split())
+    if not compact:
+        return False
+    phrases = [
+        "不会",
+        "不知道",
+        "不清楚",
+        "没听过",
+        "不了解",
+        "想不出来",
+        "答不上来",
+        "跳过",
+        "下一个",
+        "下一题",
+        "过吧",
+        "过了",
+        "你问过了",
+        "问过了",
+        "别问了",
+        "换一个",
+        "pass",
+        "skip",
+        "next",
+    ]
+    if any(phrase in compact for phrase in phrases):
+        return True
+    return compact in {"过", "不会了", "不知道了"}
+
+
+def _max_follow_ups_for_interview(total_rounds: int) -> int:
+    if total_rounds <= 2:
+        return max(0, settings.INTERVIEW_SHORT_ROUNDS_MAX_FOLLOW_UPS)
+    return max(0, settings.INTERVIEW_MAX_FOLLOW_UPS_PER_QUESTION)
+
+
+def _closing_message() -> str:
+    return "好的，本轮面试到这里结束。感谢你的回答，接下来我会为你生成评估报告。"
+
+
+def _move_next_message(question: str, skipped: bool = False) -> str:
+    if skipped:
+        return f"好的，这个点先跳过。下一题：{question}"
+    return f"好的，我们进入下一题：{question}"
 
 ROLES = [
     {
@@ -276,7 +324,13 @@ def get_interview_messages(interview_id: int, db: Session = Depends(get_db), use
         raise HTTPException(status_code=404, detail="Interview not found or unauthorized")
     
     messages = db.query(models.Message).filter(models.Message.interview_id == interview_id).order_by(models.Message.created_at.asc()).all()
-    return messages
+    responses = [schemas.MessageResponse.model_validate(message) for message in messages]
+    if interview.status == "completed":
+        for message in reversed(responses):
+            if message.sender == "ai":
+                message.is_final = True
+                break
+    return responses
 
 @router.get("/{interview_id}/evaluation", response_model=schemas.EvaluationDetail)
 def get_evaluation(interview_id: int, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
@@ -307,13 +361,128 @@ async def send_message(interview_id: int, msg: schemas.MessageSend, db: Session 
     ai_msg_resp, _ = await process_message_logic(interview_id, msg.content, db, user_id)
     return ai_msg_resp
 
+
+def _voice_upload_root() -> str:
+    if settings.VOICE_UPLOAD_DIR:
+        return settings.VOICE_UPLOAD_DIR
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "uploads", "voice"))
+
+
+def _persist_voice_upload(interview_id: int, file: UploadFile) -> tuple[str, str]:
+    extension = os.path.splitext(file.filename or "")[1].lower()
+    if extension not in {".webm", ".wav", ".mp3", ".m4a", ".mp4", ".ogg"}:
+        extension = ".webm"
+    target_dir = os.path.join(_voice_upload_root(), str(interview_id))
+    os.makedirs(target_dir, exist_ok=True)
+    target_path = os.path.join(target_dir, f"voice_{uuid.uuid4()}{extension}")
+    with open(target_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    return target_path, file.content_type or ""
+
+
+def _store_voice_metrics(db: Session, interview_id: int, message_id: int, audio_path: str, stt_result: dict) -> None:
+    existing = db.query(models.VoiceMetrics).filter(models.VoiceMetrics.message_id == message_id).first()
+    if existing:
+        return
+    metrics = analyze_audio(audio_path, stt_result)
+    if metrics is None:
+        print(f"[voice_metrics] skip (audio too short or empty) for interview={interview_id}")
+        return
+    vm = models.VoiceMetrics(
+        interview_id=interview_id,
+        message_id=message_id,
+        duration_sec=metrics["duration_sec"],
+        wpm=metrics["wpm"],
+        pause_ratio=metrics["pause_ratio"],
+        long_pause_count=metrics["long_pause_count"],
+        filler_total=metrics["filler_total"],
+        pitch_mean=metrics["pitch_mean"],
+        pitch_std=metrics["pitch_std"],
+        volume_mean=metrics["volume_mean"],
+        volume_std=metrics["volume_std"],
+        raw_json=json.dumps(metrics, ensure_ascii=False),
+    )
+    db.add(vm)
+    db.commit()
+    print(f"[voice_metrics] saved for interview={interview_id}, message={message_id}, wpm={metrics['wpm']}")
+
+
+async def _run_voice_reply_job(interview_id: int, user_id: int, user_msg_id: int, audio_path: str, stt_result: dict):
+    db = SessionLocal()
+    try:
+        user_msg = db.query(models.Message).filter(
+            models.Message.id == user_msg_id,
+            models.Message.interview_id == interview_id,
+            models.Message.sender == "user",
+        ).first()
+        if not user_msg:
+            print(f"[voice_reply_job] user message not found: {user_msg_id}")
+            return
+
+        try:
+            polished = await polish_text(user_msg.content or "")
+            if polished and polished != user_msg.content:
+                user_msg.content = polished
+                stt_result = {**(stt_result or {}), "text": polished}
+                db.commit()
+        except Exception as e:
+            print(f"[voice_reply_job] polish failed: {type(e).__name__}: {e}")
+
+        try:
+            _store_voice_metrics(db, interview_id, user_msg_id, audio_path, stt_result)
+        except Exception as e:
+            print(f"[voice_metrics] analyze failed: {type(e).__name__}: {e}")
+            db.rollback()
+
+        try:
+            await process_message_logic(interview_id, user_msg.content or "", db, user_id, user_msg=user_msg)
+        except Exception as e:
+            print(f"[voice_reply_job] AI reply failed: {type(e).__name__}: {e}")
+            db.rollback()
+    finally:
+        db.close()
+
+
 @router.post("/{interview_id}/voice", response_model=schemas.VoiceResponse)
 async def upload_voice(
     interview_id: int,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
 ):
+    interview = db.query(models.Interview).filter(models.Interview.id == interview_id, models.Interview.user_id == user_id).first()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview not found or unauthorized")
+
+    audio_path, mime_type = _persist_voice_upload(interview_id, file)
+    stt_result = stt_service.transcribe_detailed(audio_path, mime_type=mime_type)
+    if not stt_result or not stt_result.get("text"):
+        try:
+            os.remove(audio_path)
+        except OSError:
+            pass
+        raise HTTPException(status_code=400, detail="语音转录失败，请重试或手动输入")
+
+    transcript = stt_result["text"].strip()
+    user_msg = models.Message(
+        interview_id=interview_id,
+        sender="user",
+        content=transcript,
+        audio_path=audio_path,
+    )
+    db.add(user_msg)
+    db.commit()
+    db.refresh(user_msg)
+
+    background_tasks.add_task(_run_voice_reply_job, interview_id, user_id, user_msg.id, audio_path, stt_result)
+    return schemas.VoiceResponse(
+        transcription=transcript,
+        user_message=schemas.MessageResponse.model_validate(user_msg),
+        ai_message=None,
+        reply_status="processing",
+    )
+
     # 1. Save uploaded file to temporary location
     temp_dir = tempfile.gettempdir()
     file_extension = os.path.splitext(file.filename)[1] if file.filename else ".webm"
@@ -374,17 +543,20 @@ async def upload_voice(
             except:
                 pass
 
-async def process_message_logic(interview_id: int, content: str, db: Session, user_id: int):
+async def process_message_logic(interview_id: int, content: str, db: Session, user_id: int, user_msg: models.Message | None = None):
     # 1. Fetch interview context
     interview = db.query(models.Interview).filter(models.Interview.id == interview_id, models.Interview.user_id == user_id).first()
     if not interview:
         raise HTTPException(status_code=404, detail="Interview not found or unauthorized")
 
     # 2. Save User Message
-    user_msg = models.Message(interview_id=interview_id, sender="user", content=content)
-    db.add(user_msg)
-    db.commit()
-    db.refresh(user_msg)  
+    if user_msg is None:
+        user_msg = models.Message(interview_id=interview_id, sender="user", content=content)
+        db.add(user_msg)
+        db.commit()
+        db.refresh(user_msg)
+    else:
+        content = user_msg.content or content
 
     # 3. Analyze History
     messages = db.query(models.Message).filter(models.Message.interview_id == interview_id).order_by(models.Message.created_at.asc()).all()
@@ -402,6 +574,23 @@ async def process_message_logic(interview_id: int, content: str, db: Session, us
 
     question_count = len(main_questions_asked)
     n = interview.total_rounds or 6
+    skipped_or_boundary = _is_skip_or_boundary_answer(content)
+
+    if question_count >= n:
+        interview.status = "completed"
+        interview.end_time = interview.end_time or datetime.utcnow()
+        ai_msg = models.Message(
+            interview_id=interview_id,
+            sender="ai",
+            content=_closing_message(),
+            category="closing",
+        )
+        db.add(ai_msg)
+        db.commit()
+        db.refresh(ai_msg)
+        response = schemas.MessageResponse.model_validate(ai_msg)
+        response.is_final = True
+        return response, user_msg.id
 
     # 4. Determine Stage & Next Target
     # v4 新逻辑：4 段式覆盖赛题要求的全部题型
@@ -491,9 +680,12 @@ async def process_message_logic(interview_id: int, content: str, db: Session, us
     last_main_q = main_questions_asked[-1] if main_questions_asked else ai_msgs[0]
     
     force_next = ""
-    if current_follow_up_count >= 2:
+    max_follow_ups = _max_follow_ups_for_interview(n)
+    force_transition = skipped_or_boundary or current_follow_up_count >= max_follow_ups
+    if force_transition:
         force_next = "【系统指令：强制切换】当前话题已追问满 2 次，请务必结束当前话题，给出一个简短评价并过渡到下一个问题。"
-    if current_stage == "project" and has_custom:
+        force_next = "【系统指令：强制切换】候选人已表达不会、跳过，或当前问题追问已到上限。必须结束当前问题，不要重复追问同一个知识点，直接进入下一题。"
+    if current_stage == "project" and has_custom and not force_transition:
         repo_name = target_q_obj.get("repo", "")
         force_next = f"【系统指令：GitHub 项目深挖】必须结束当前话题并切换到项目深挖。下一题必须围绕候选人的 GitHub 仓库{repo_name}，必须自然问出：{target_q_obj.get('question', '')}"
 
@@ -524,6 +716,9 @@ async def process_message_logic(interview_id: int, content: str, db: Session, us
             target_next_text,
             target_q_obj.get("repo", ""),
         )
+    if force_transition and not is_final_move:
+        llm_resp["action"] = "MOVE_NEXT"
+        llm_resp["text"] = _move_next_message(target_next_text, skipped=skipped_or_boundary)
 
     # 7. Update State
     final_is_ended = False
@@ -593,6 +788,25 @@ async def _build_and_store_evaluation(interview_id: int, db: Session) -> dict | 
         evaluation_data.setdefault(score_key, 0.0)
 
     from evaluation.expression_evaluator import score_expression
+
+    voice_messages = db.query(models.Message).filter(
+        models.Message.interview_id == interview_id,
+        models.Message.sender == "user",
+        models.Message.audio_path.isnot(None),
+    ).all()
+    for message in voice_messages:
+        if message.audio_path and os.path.exists(message.audio_path):
+            try:
+                _store_voice_metrics(
+                    db,
+                    interview_id,
+                    message.id,
+                    message.audio_path,
+                    {"text": message.content or "", "segments": [], "language": settings.WHISPER_LANGUAGE or "zh"},
+                )
+            except Exception as e:
+                print(f"[end_interview] voice metric backfill failed for message={message.id}: {type(e).__name__}: {e}")
+                db.rollback()
     
     # 从数据库查出所有的 voice_metrics 并反序列化
     voice_records = db.query(models.VoiceMetrics).filter(models.VoiceMetrics.interview_id == interview_id).all()

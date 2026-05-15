@@ -252,6 +252,17 @@ ensure_backend_env_judge0() {
   set_backend_env CODE_MAX_TEST_CASES "30"
   set_backend_env CODE_MAX_CONCURRENT_JUDGE_CASES "8"
   set_backend_env CODE_OUTPUT_LIMIT "4000"
+  set_backend_env ASR_PROVIDER "dashscope"
+  set_backend_env ASR_BASE_URL "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+  set_backend_env ASR_MODEL "qwen3-asr-flash"
+  set_backend_env ASR_LANGUAGE "zh"
+  set_backend_env ASR_TIMEOUT_SECONDS "35"
+  set_backend_env ASR_ENABLE_ITN "true"
+  set_backend_env ASR_TRANSCODE_AUDIO "true"
+  set_backend_env ASR_MAX_AUDIO_BYTES "10485760"
+  set_backend_env VOICE_UPLOAD_DIR "$remote_root/shared/voice"
+  set_backend_env INTERVIEW_MAX_FOLLOW_UPS_PER_QUESTION "1"
+  set_backend_env INTERVIEW_SHORT_ROUNDS_MAX_FOLLOW_UPS "0"
 }
 
 ensure_judge0() {
