@@ -1,3 +1,5 @@
+import threading
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from db import models
@@ -20,6 +22,22 @@ except Exception as e:
 from core.config import settings
 
 app = FastAPI(title="InterviewEcho API", description="AI Mock Interview MVP")
+
+
+@app.on_event("startup")
+def preload_whisper_model():
+    if not settings.WHISPER_PRELOAD:
+        return
+
+    def _load():
+        try:
+            from services.stt_service import stt_service
+
+            stt_service.load_model()
+        except Exception as e:
+            print(f"Warning: Could not preload Whisper model: {type(e).__name__}: {e}")
+
+    threading.Thread(target=_load, name="whisper-preload", daemon=True).start()
 
 # CORS setup
 app.add_middleware(

@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
     LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-3.5-turbo-1106")
     LLM_EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+    WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "base")
+    WHISPER_CACHE_DIR: str = os.getenv("WHISPER_CACHE_DIR", "")
+    WHISPER_LANGUAGE: str = os.getenv("WHISPER_LANGUAGE", "zh")
+    WHISPER_WORD_TIMESTAMPS: bool = os.getenv("WHISPER_WORD_TIMESTAMPS", "false").lower() in ("1", "true", "yes")
+    WHISPER_PRELOAD: bool = os.getenv("WHISPER_PRELOAD", "true").lower() in ("1", "true", "yes")
     
     DB_HOST: str = os.getenv("DB_HOST", "localhost")
     DB_USER: str = os.getenv("DB_USER", "root")

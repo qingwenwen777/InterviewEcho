@@ -1559,7 +1559,7 @@ function InterviewRoom() {
     try {
       const { data } = await api.post(`/interview/${interviewId}/voice`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
-        timeout: 180000,
+        timeout: 300000,
       })
       setMessages((current) => [
         ...current,
