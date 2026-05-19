@@ -170,6 +170,84 @@ async def generate_repo_questions(role: str, repo_summary: dict) -> list[dict]:
         return []
 
 
+def _stringify_study_task(task) -> str:
+    if isinstance(task, str):
+        return task
+    if isinstance(task, dict):
+        title = task.get("title") or task.get("type") or ""
+        note = task.get("note") or task.get("description") or ""
+        return "：".join(part for part in [title, note] if part) or "完成一项针对性练习"
+    return "完成一项针对性练习"
+
+
+def _normalize_weak_area(area) -> dict:
+    if isinstance(area, dict):
+        name = area.get("area") or area.get("title") or area.get("name") or "待加强领域"
+        return {
+            "area": name,
+            "severity": area.get("severity") or "中",
+            "diagnosis": area.get("diagnosis") or area.get("note") or str(name),
+        }
+    if isinstance(area, str):
+        return {"area": area, "severity": "中", "diagnosis": area}
+    return {"area": "待加强领域", "severity": "中", "diagnosis": "建议结合报告详情继续复盘。"}
+
+
+def _normalize_study_plan(data: dict) -> dict:
+    if not isinstance(data, dict):
+        data = {}
+
+    fallback_weeks = [
+        {
+            "week": 1,
+            "focus": "夯实核心基础",
+            "tasks": ["复盘本次薄弱题目并整理关键概念", "补齐一个高频知识点的原理图谱", "完成一次 20 分钟口述练习"],
+        },
+        {
+            "week": 2,
+            "focus": "强化工程实践",
+            "tasks": ["阅读一篇官方文档并写 150 字总结", "用小 Demo 验证一个工程化知识点", "整理项目中可量化的技术亮点"],
+        },
+        {
+            "week": 3,
+            "focus": "提升表达结构",
+            "tasks": ["准备 STAR 结构项目案例", "录制 3 分钟技术讲解并复盘", "把复杂问题拆成背景、方案、结果三段"],
+        },
+        {
+            "week": 4,
+            "focus": "模拟面试冲刺",
+            "tasks": ["完成一轮同岗位限时模拟", "复盘错题并更新答案模板", "总结 5 个可追问的项目细节"],
+        },
+    ]
+
+    weak_areas = data.get("weak_areas") if isinstance(data.get("weak_areas"), list) else []
+    quick_wins = data.get("quick_wins") if isinstance(data.get("quick_wins"), list) else []
+    raw_plan = data.get("plan") if isinstance(data.get("plan"), list) else []
+
+    normalized_weeks = []
+    for index, fallback in enumerate(fallback_weeks):
+        raw = raw_plan[index] if index < len(raw_plan) and isinstance(raw_plan[index], dict) else {}
+        raw_tasks = raw.get("tasks") if isinstance(raw.get("tasks"), list) else []
+        tasks = [_stringify_study_task(task) for task in raw_tasks[:3]]
+        while len(tasks) < 3:
+            tasks.append(fallback["tasks"][len(tasks)])
+        normalized_weeks.append(
+            {
+                "week": raw.get("week") or fallback["week"],
+                "focus": raw.get("focus") or fallback["focus"],
+                "tasks": tasks,
+            }
+        )
+
+    return {
+        **data,
+        "weak_areas": [_normalize_weak_area(area) for area in weak_areas[:3]],
+        "quick_wins": [_stringify_study_task(item) for item in quick_wins[:3]]
+        or ["完成一次同岗位限时复盘", "整理 3 个高频追问答案", "用 10 分钟复述本次最弱知识点"],
+        "plan": normalized_weeks,
+    }
+
+
 async def generate_study_plan(role: str, evaluation_data: dict, history: list) -> dict | None:
     """
     根据面试评估结果 + 对话历史，让 LLM 生成分周学习计划 + 资源推荐 + 快速收益项。
@@ -211,13 +289,14 @@ async def generate_study_plan(role: str, evaluation_data: dict, history: list) -
             model=settings.LLM_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": "请根据上述评估结果，按约定 JSON 格式输出学习计划。"},
+                {"role": "user", "content": "请根据上述评估结果，按约定 JSON 格式输出学习计划。plan 必须且只能包含 4 个 week，每个 week 给出 3 个 tasks；weak_areas 最多 3 个，quick_wins 3 个。"},
             ],
             temperature=0.5,
             response_format={"type": "json_object"},
         )
         content = (response.choices[0].message.content or "").strip()
         data = json.loads(content)
+        data = _normalize_study_plan(data)
         # 简单校验结构
         if not isinstance(data.get("plan"), list):
             print(f"[generate_study_plan] unexpected format: missing 'plan' list")

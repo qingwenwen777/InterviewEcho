@@ -13,6 +13,7 @@ from typing import List
 import json
 import os
 import random
+import re
 from db import models, schemas
 from db.database import SessionLocal, get_db
 from datetime import datetime
@@ -74,10 +75,50 @@ def _summary_matches_url(summary: dict, url: str) -> bool:
     return any(_normalize_url(candidate) == target for candidate in candidates if candidate)
 
 
+_QUESTION_NOISE_RE = re.compile(r"[\s\W_]+", re.UNICODE)
+
+
+def _normalize_question_text(value: str) -> str:
+    text = (value or "").lower()
+    text = re.sub(
+        r"(感谢你的回答|你已经|不过我想|我想进一步问一下|接下来|下一题|好的|请问|能否|能不能|一下|哪些|什么)",
+        "",
+        text,
+    )
+    return _QUESTION_NOISE_RE.sub("", text)
+
+
+def _char_bigrams(text: str) -> set[str]:
+    if len(text) < 2:
+        return {text} if text else set()
+    return {text[i : i + 2] for i in range(len(text) - 1)}
+
+
+def _question_similarity(left: str, right: str) -> float:
+    left_norm = _normalize_question_text(left)
+    right_norm = _normalize_question_text(right)
+    if not left_norm or not right_norm:
+        return 0.0
+    if left_norm in right_norm or right_norm in left_norm:
+        return min(len(left_norm), len(right_norm)) / max(len(left_norm), len(right_norm))
+    left_set = _char_bigrams(left_norm)
+    right_set = _char_bigrams(right_norm)
+    return len(left_set & right_set) / max(1, len(left_set | right_set))
+
+
 def _question_was_asked(question: str, ai_messages: list) -> bool:
     if not question:
         return False
-    return any(question in (m.content or "") for m in ai_messages)
+    return any(
+        question in (m.content or "") or _question_similarity(question, m.content or "") >= 0.72
+        for m in ai_messages
+    )
+
+
+def _is_repeated_ai_question(text: str, ai_messages: list) -> bool:
+    if not text:
+        return False
+    return any(_question_similarity(text, m.content or "") >= 0.62 for m in ai_messages[-5:])
 
 
 def _with_forced_question(text: str, question: str, repo_name: str = "") -> str:
@@ -683,7 +724,6 @@ async def process_message_logic(interview_id: int, content: str, db: Session, us
     max_follow_ups = _max_follow_ups_for_interview(n)
     force_transition = skipped_or_boundary or current_follow_up_count >= max_follow_ups
     if force_transition:
-        force_next = "【系统指令：强制切换】当前话题已追问满 2 次，请务必结束当前话题，给出一个简短评价并过渡到下一个问题。"
         force_next = "【系统指令：强制切换】候选人已表达不会、跳过，或当前问题追问已到上限。必须结束当前问题，不要重复追问同一个知识点，直接进入下一题。"
     if current_stage == "project" and has_custom and not force_transition:
         repo_name = target_q_obj.get("repo", "")
@@ -699,26 +739,35 @@ async def process_message_logic(interview_id: int, content: str, db: Session, us
         target_next_text = target_q_obj["question"]
 
     # 6. Generate AI Response
-    llm_resp = await generate_llm_response(
-        role=interview.role,
-        question=last_main_q.content,
-        expected_points="、".join(target_q_obj.get("key_points") or target_q_obj.get("expected_points") or ["技术准确性", "实践经验"]),
-        conversation_history=history_str,
-        target_next_question=target_next_text,
-        difficulty=interview.difficulty,
-        knowledge_points=interview.knowledge_points,
-        force_next_instruction=force_next
-    )
-    if current_stage == "project" and has_custom and not is_final_move:
-        llm_resp["action"] = "MOVE_NEXT"
-        llm_resp["text"] = _with_forced_question(
-            llm_resp.get("text", ""),
-            target_next_text,
-            target_q_obj.get("repo", ""),
+    if is_final_move:
+        llm_resp = {"action": "MOVE_NEXT", "text": _closing_message()}
+    elif force_transition:
+        llm_resp = {"action": "MOVE_NEXT", "text": _move_next_message(target_next_text, skipped=skipped_or_boundary)}
+    else:
+        llm_resp = await generate_llm_response(
+            role=interview.role,
+            question=last_main_q.content,
+            expected_points="、".join(target_q_obj.get("key_points") or target_q_obj.get("expected_points") or ["技术准确性", "实践经验"]),
+            conversation_history=history_str,
+            target_next_question=target_next_text,
+            difficulty=interview.difficulty,
+            knowledge_points=interview.knowledge_points,
+            force_next_instruction=force_next
         )
-    if force_transition and not is_final_move:
-        llm_resp["action"] = "MOVE_NEXT"
-        llm_resp["text"] = _move_next_message(target_next_text, skipped=skipped_or_boundary)
+        if current_stage == "project" and has_custom:
+            llm_resp["action"] = "MOVE_NEXT"
+            llm_resp["text"] = _with_forced_question(
+                llm_resp.get("text", ""),
+                target_next_text,
+                target_q_obj.get("repo", ""),
+            )
+        repeated_follow_up = (
+            llm_resp.get("action") == "FOLLOW_UP"
+            and _is_repeated_ai_question(llm_resp.get("text", ""), ai_msgs)
+        )
+        if repeated_follow_up:
+            llm_resp["action"] = "MOVE_NEXT"
+            llm_resp["text"] = _move_next_message(target_next_text, skipped=False)
 
     # 7. Update State
     final_is_ended = False

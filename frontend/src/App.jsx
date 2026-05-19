@@ -161,6 +161,7 @@ const CODE_JUDGE_TIMEOUT_MS = 240000
 const CODE_RESULT_SYNC_ATTEMPTS = 80
 const CODE_RESULT_SYNC_INTERVAL_MS = 2000
 const CODE_PAGE_SIZE = 20
+const PROFILE_HISTORY_PAGE_SIZE = 8
 const CODE_PENDING_STATUSES = new Set(['Running'])
 const CODE_CLIENT_ERROR_RESULT = {
   index: 1,
@@ -1695,6 +1696,7 @@ function ProfilePage() {
   const [history, setHistory] = useState([])
   const [filterRole, setFilterRole] = useState('All')
   const [filterDifficulty, setFilterDifficulty] = useState('All')
+  const [historyPage, setHistoryPage] = useState(1)
   const pendingRecord = useMemo(() => {
     if (!pendingInterviewId) return null
     return {
@@ -1789,6 +1791,20 @@ function ProfilePage() {
       }),
     [filterDifficulty, filterRole, history],
   )
+  const historyTotalPages = Math.max(1, Math.ceil(filteredHistory.length / PROFILE_HISTORY_PAGE_SIZE))
+  const visibleHistory = filteredHistory.slice(
+    (historyPage - 1) * PROFILE_HISTORY_PAGE_SIZE,
+    historyPage * PROFILE_HISTORY_PAGE_SIZE,
+  )
+
+  useEffect(() => {
+    setHistoryPage(1)
+  }, [filterDifficulty, filterRole])
+
+  useEffect(() => {
+    setHistoryPage((current) => Math.min(current, historyTotalPages))
+  }, [historyTotalPages])
+
   const averageScore = useMemo(() => {
     const completedHistory = history.filter(isHistoryCompleted)
     if (!completedHistory.length) return '0.0'
@@ -1871,7 +1887,7 @@ function ProfilePage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredHistory.map((item) => {
+                {visibleHistory.map((item) => {
                   const generating = isHistoryGenerating(item)
                   const failed = isHistoryFailed(item)
                   return (
@@ -1918,6 +1934,14 @@ function ProfilePage() {
               </tbody>
             </table>
           </div>
+          <CodePagination
+            page={historyPage}
+            totalPages={historyTotalPages}
+            totalCount={filteredHistory.length}
+            pageSize={PROFILE_HISTORY_PAGE_SIZE}
+            onChange={setHistoryPage}
+            compact
+          />
         </section>
       </section>
     </div>
@@ -2007,7 +2031,7 @@ function ReportPage() {
 
   if (!report) {
     return (
-      <div className="page enter-page">
+      <div className="page enter-page report-loading-page">
         <EmptyState text={reportError || evaluationStatusText(reportStatus)} loading={!reportError} />
       </div>
     )
@@ -3245,10 +3269,10 @@ function CodeStatementBlock({ title, text }) {
   )
 }
 
-function CodePagination({ page, totalPages, totalCount, onChange, compact = false }) {
+function CodePagination({ page, totalPages, totalCount, onChange, compact = false, pageSize = CODE_PAGE_SIZE }) {
   if (totalPages <= 1) return null
-  const start = (page - 1) * CODE_PAGE_SIZE + 1
-  const end = Math.min(totalCount, page * CODE_PAGE_SIZE)
+  const start = (page - 1) * pageSize + 1
+  const end = Math.min(totalCount, page * pageSize)
   return (
     <div className={`code-pagination ${compact ? 'compact' : ''}`}>
       <span>
@@ -3512,8 +3536,29 @@ function FillerWords({ data }) {
 
 function StudyPlan({ plan }) {
   const weakAreas = plan.weak_areas || []
-  const weeks = plan.plan || []
+  const rawWeeks = Array.isArray(plan.plan) ? plan.plan : []
   const quickWins = plan.quick_wins || []
+  const fallbackWeeks = [
+    { week: 1, focus: '夯实核心基础', tasks: ['复盘本次薄弱题目并整理关键概念', '补齐一个高频知识点的原理图谱', '完成一次 20 分钟口述练习'] },
+    { week: 2, focus: '强化工程实践', tasks: ['阅读一篇官方文档并写 150 字总结', '用小 Demo 验证一个工程化知识点', '整理项目中可量化的技术亮点'] },
+    { week: 3, focus: '提升表达结构', tasks: ['准备 STAR 结构项目案例', '录制 3 分钟技术讲解并复盘', '把复杂问题拆成背景、方案、结果三段'] },
+    { week: 4, focus: '模拟面试冲刺', tasks: ['完成一轮同岗位限时模拟', '复盘错题并更新答案模板', '总结 5 个可追问的项目细节'] },
+  ]
+  const weeks = Array.from({ length: 4 }, (_, index) => ({
+    ...fallbackWeeks[index],
+    ...(rawWeeks[index] || {}),
+    week: rawWeeks[index]?.week || index + 1,
+  }))
+  const formatTask = (item) => {
+    if (typeof item === 'string') return item
+    if (!item || typeof item !== 'object') return '完成一项针对性练习'
+    return [item.title, item.note].filter(Boolean).join('：') || item.type || '完成一项针对性练习'
+  }
+  const formatWeakArea = (area) => {
+    if (typeof area === 'string') return `中 · ${area}`
+    if (!area || typeof area !== 'object') return '中 · 待加强领域'
+    return `${area.severity || '中'} · ${area.area || area.title || area.diagnosis || '待加强领域'}`
+  }
   const weekIcons = [
     <Code2 size={36} />,
     <Settings size={36} />,
@@ -3526,20 +3571,22 @@ function StudyPlan({ plan }) {
       kicker: '诊断',
       title: '薄弱领域优先级',
       items: weakAreas.length
-        ? weakAreas.slice(0, 3).map((area) => `${area.severity || '中'} · ${area.area}`)
+        ? weakAreas.slice(0, 3).map(formatWeakArea)
         : ['暂无明显薄弱领域，保持当前练习节奏'],
     },
     {
       icon: <TimerReset size={36} />,
       kicker: '快速收益',
       title: '本周可立即完成',
-      items: quickWins.length ? quickWins.slice(0, 3) : ['完成一次同岗位限时复盘', '整理 3 个高频追问答案'],
+      items: quickWins.length
+        ? quickWins.slice(0, 3).map(formatTask)
+        : ['完成一次同岗位限时复盘', '整理 3 个高频追问答案', '用 10 分钟复述本次最弱知识点'],
     },
-    ...weeks.slice(0, 4).map((week, index) => ({
+    ...weeks.map((week, index) => ({
       icon: weekIcons[index] || <FileText size={36} />,
       kicker: `第 ${week.week || index + 1} 周`,
       title: week.focus || `第 ${index + 1} 周训练`,
-      items: (week.tasks || []).slice(0, 3),
+      items: (week.tasks?.length ? week.tasks : fallbackWeeks[index].tasks).slice(0, 3).map(formatTask),
     })),
   ].slice(0, 6)
 

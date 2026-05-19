@@ -4112,10 +4112,8 @@ tr:hover td {
 }
 
 .profile-page .table-wrap {
-  max-height: min(410px, 48vh);
-  overflow: auto;
+  overflow: visible;
   border-top: 1px solid rgba(0, 0, 0, 0.1);
-  scrollbar-gutter: stable;
 }
 
 .profile-page th,
@@ -4921,6 +4919,20 @@ strong {
   background: rgba(0, 0, 0, 0.2);
 }
 
+.report-loading-page {
+  min-height: calc(100dvh - 76px);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.report-loading-page .empty-state {
+  width: min(620px, calc(100vw - 48px));
+  min-height: 220px;
+  justify-content: center;
+  text-align: center;
+}
+
 .review-snap-section {
   width: min(1720px, calc(100% - clamp(56px, 7vw, 156px)));
   min-height: 100%;
@@ -5056,6 +5068,12 @@ strong {
   padding: 28px 34px 30px;
 }
 
+.profile-page .history-panel .code-pagination {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
 .profile-page .panel-head,
 .report-page .panel-head {
   min-height: 0;
@@ -5081,10 +5099,9 @@ strong {
 }
 
 .profile-page .table-wrap {
-  max-height: calc(100dvh - 300px);
-  overflow: auto;
+  max-height: none;
+  overflow: visible;
   border-top: 1px solid rgba(0, 0, 0, 0.08);
-  scrollbar-gutter: stable;
 }
 
 .profile-page th,
@@ -5094,6 +5111,7 @@ strong {
 }
 
 .profile-page th {
+  position: static;
   background: #fffdf7;
   font-weight: 500;
 }
