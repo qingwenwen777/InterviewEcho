@@ -107,6 +107,51 @@ class VoiceResponse(BaseModel):
     reply_status: str = "processing"
 
 
+class ProfileResumeUpdate(BaseModel):
+    display_name: Optional[str] = None
+    headline: Optional[str] = None
+    target_role: Optional[str] = None
+    resume_text: Optional[str] = None
+    use_ai: bool = True
+
+
+class UserProfileData(BaseModel):
+    id: Optional[int] = None
+    display_name: str = ""
+    headline: str = ""
+    target_role: str = ""
+    resume_filename: str = ""
+    resume_text: str = ""
+    resume_summary: str = ""
+    skills: List[str] = []
+    education: List[str] = []
+    experience: List[str] = []
+    projects: List[str] = []
+    updated_at: Optional[datetime] = None
+
+
+class UserProjectCreate(BaseModel):
+    url: str
+
+
+class UserProjectItem(BaseModel):
+    id: int
+    url: str
+    full_name: str
+    name: str = ""
+    description: str = ""
+    main_language: str = ""
+    stars: int = 0
+    tech_keywords: List[str] = []
+    summary: Dict[str, Any] = {}
+    updated_at: Optional[datetime] = None
+
+
+class UserProfileResponse(BaseModel):
+    profile: UserProfileData
+    projects: List[UserProjectItem] = []
+
+
 class CodeProblemListItem(BaseModel):
     id: int
     title: str

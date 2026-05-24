@@ -113,6 +113,87 @@ async def polish_text(text: str):
         print(f"Error polishing text: {e}")
         return text
 
+
+def _string_list(value, limit: int = 8) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result = []
+    for item in value[:limit]:
+        if isinstance(item, str):
+            text = item.strip()
+        elif isinstance(item, dict):
+            text = " / ".join(str(part).strip() for part in item.values() if str(part).strip())
+        else:
+            text = str(item).strip()
+        if text:
+            result.append(text[:220])
+    return result
+
+
+async def parse_resume_profile(text: str) -> dict:
+    """
+    Use the configured OpenAI-compatible LLM to turn raw resume text into a
+    compact profile snapshot. Returns a safe fallback if the LLM is unavailable.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return {
+            "summary": "",
+            "skills": [],
+            "education": [],
+            "experience": [],
+            "projects": [],
+            "headline": "",
+            "target_role": "",
+        }
+
+    prompt_text = raw[:9000]
+    fallback = {
+        "summary": prompt_text[:500],
+        "skills": [],
+        "education": [],
+        "experience": [],
+        "projects": [],
+        "headline": "",
+        "target_role": "",
+    }
+
+    try:
+        response = await _create_chat_completion(
+            timeout_seconds=30,
+            model=settings.LLM_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "你是招聘场景的简历信息抽取助手。请从候选人简历中提取可用于模拟面试的资料，"
+                        "不要编造。只输出 JSON：summary 字符串；headline 字符串；target_role 字符串；"
+                        "skills、education、experience、projects 均为字符串数组。summary 控制在 120 字以内，"
+                        "每个数组最多 8 条，每条适合面试官快速阅读。"
+                    ),
+                },
+                {"role": "user", "content": prompt_text},
+            ],
+            temperature=0.2,
+            response_format={"type": "json_object"},
+        )
+        content = (response.choices[0].message.content or "").strip()
+        data = json.loads(content)
+        if not isinstance(data, dict):
+            return fallback
+        return {
+            "summary": str(data.get("summary") or fallback["summary"]).strip()[:700],
+            "headline": str(data.get("headline") or "").strip()[:160],
+            "target_role": str(data.get("target_role") or "").strip()[:80],
+            "skills": _string_list(data.get("skills"), 12),
+            "education": _string_list(data.get("education"), 6),
+            "experience": _string_list(data.get("experience"), 8),
+            "projects": _string_list(data.get("projects"), 8),
+        }
+    except Exception as e:
+        print(f"[parse_resume_profile] LLM error: {type(e).__name__}: {e}")
+        return fallback
+
 async def generate_repo_questions(role: str, repo_summary: dict) -> list[dict]:
     """
     根据 GitHub 仓库摘要，让 LLM 生成 3-5 个定制的项目深挖问题。

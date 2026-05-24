@@ -55,7 +55,9 @@ def read_root():
 from routers.auth import router as auth_router
 from routers.code import router as code_router
 from routers.interview import router as interview_router
+from routers.profile import router as profile_router
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(interview_router, prefix="/api/interview", tags=["interview"])
 app.include_router(code_router, prefix="/api/code", tags=["code"])
+app.include_router(profile_router, prefix="/api/profile", tags=["profile"])

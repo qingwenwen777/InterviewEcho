@@ -162,6 +162,7 @@ const CODE_RESULT_SYNC_ATTEMPTS = 80
 const CODE_RESULT_SYNC_INTERVAL_MS = 2000
 const CODE_PAGE_SIZE = 20
 const PROFILE_HISTORY_PAGE_SIZE = 8
+const PROFILE_PROJECT_LIMIT = 8
 const CODE_PENDING_STATUSES = new Set(['Running'])
 const CODE_CLIENT_ERROR_RESULT = {
   index: 1,
@@ -441,7 +442,7 @@ function MainLayout() {
           <SideLink to="/" label="工作台" />
           <SideLink to="/dashboard" label="模拟面试" />
           <SideLink to="/code" label="代码练习" />
-          <SideLink to="/profile" label="能力历史" />
+          <SideLink to="/profile" label="用户中心" />
         </nav>
 
         <div className="sidebar-user">
@@ -1119,7 +1120,7 @@ function DashboardPage() {
         action={
           <button className="button ghost" onClick={() => navigate('/profile')}>
             <History size={16} />
-            历史记录
+            用户中心
           </button>
         }
       />
@@ -1158,11 +1159,15 @@ function DashboardPage() {
 }
 
 function StartSettingsModal({ role, open, sectionState, onClose, onConfirm }) {
+  const navigate = useNavigate()
   const [difficulty, setDifficulty] = useState('中等')
   const [rounds, setRounds] = useState(6)
   const [selectedSections, setSelectedSections] = useState([])
   const [repoSlots, setRepoSlots] = useState([{ url: '', analyzing: false, summary: null, error: '' }])
   const [repoExpanded, setRepoExpanded] = useState(false)
+  const [profileLibrary, setProfileLibrary] = useState({ profile: null, projects: [] })
+  const [profileLoading, setProfileLoading] = useState(false)
+  const [selectedSavedProjectIds, setSelectedSavedProjectIds] = useState([])
   const sections = sectionState?.items || []
   const loadingSections = Boolean(open && role?.key && (!sectionState || sectionState.status === 'loading'))
 
@@ -1173,10 +1178,38 @@ function StartSettingsModal({ role, open, sectionState, onClose, onConfirm }) {
     setSelectedSections([])
     setRepoSlots([{ url: '', analyzing: false, summary: null, error: '' }])
     setRepoExpanded(false)
+    setSelectedSavedProjectIds([])
   }, [open, role])
 
+  useEffect(() => {
+    if (!open) return undefined
+    let alive = true
+    setProfileLoading(true)
+    api
+      .get('/profile')
+      .then(({ data }) => {
+        if (!alive) return
+        setProfileLibrary({
+          profile: data?.profile || null,
+          projects: Array.isArray(data?.projects) ? data.projects : [],
+        })
+      })
+      .catch(() => {
+        if (alive) setProfileLibrary({ profile: null, projects: [] })
+      })
+      .finally(() => {
+        if (alive) setProfileLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [open])
+
   const groupedSections = useMemo(() => groupInterviewSections(sections), [sections])
-  const selectedRepoCount = repoSlots.filter((slot) => slot.url.trim() && !slot.error).length
+  const savedProjects = profileLibrary.projects || []
+  const profile = profileLibrary.profile || {}
+  const hasSavedResume = Boolean((profile.resume_summary || profile.resume_text || '').trim())
+  const selectedRepoCount = selectedSavedProjectIds.length + repoSlots.filter((slot) => slot.url.trim() && !slot.error).length
   const selectedSectionText = loadingSections
     ? '正在准备'
     : selectedSections.length
@@ -1197,6 +1230,14 @@ function StartSettingsModal({ role, open, sectionState, onClose, onConfirm }) {
     setRepoSlots((current) => current.map((slot, idx) => (idx === index ? { ...slot, ...patch } : slot)))
   }
 
+  const toggleSavedProject = (projectId) => {
+    setSelectedSavedProjectIds((current) => {
+      if (current.includes(projectId)) return current.filter((item) => item !== projectId)
+      if (selectedRepoCount >= 3) return current
+      return [...current, projectId]
+    })
+  }
+
   const analyzeRepo = async (index) => {
     const slot = repoSlots[index]
     if (!slot?.url?.trim()) return
@@ -1211,8 +1252,13 @@ function StartSettingsModal({ role, open, sectionState, onClose, onConfirm }) {
 
   const submit = () => {
     const selectedRepoSlots = repoSlots.filter((slot) => slot.url.trim() && !slot.error)
-    const repo_urls = selectedRepoSlots.map((slot) => slot.url.trim())
-    const repo_summaries = selectedRepoSlots.map((slot) => slot.summary).filter(Boolean)
+    const selectedSavedProjects = savedProjects.filter((project) => selectedSavedProjectIds.includes(project.id))
+    const repoEntries = [
+      ...selectedSavedProjects.map((project) => ({ url: project.url, summary: project.summary || null })),
+      ...selectedRepoSlots.map((slot) => ({ url: slot.url.trim(), summary: slot.summary })),
+    ].slice(0, 3)
+    const repo_urls = repoEntries.map((entry) => entry.url)
+    const repo_summaries = repoEntries.map((entry) => entry.summary).filter(Boolean)
 
     onConfirm({
       difficulty,
@@ -1322,6 +1368,64 @@ function StartSettingsModal({ role, open, sectionState, onClose, onConfirm }) {
             ) : (
               <div className="muted-row">暂无可选知识点，默认走完整流程。</div>
             )}
+          </section>
+
+          <section className="settings-field candidate-field">
+            <div className="candidate-field-head">
+              <div>
+                <span>候选人资料</span>
+                <strong>
+                  {profileLoading
+                    ? '读取中'
+                    : hasSavedResume
+                      ? '已保存简历'
+                      : savedProjects.length
+                        ? '已保存项目'
+                        : '用户中心未填写'}
+                </strong>
+              </div>
+              <button
+                type="button"
+                className="button ghost small"
+                onClick={() => {
+                  onClose()
+                  navigate('/profile')
+                }}
+              >
+                管理资料
+              </button>
+            </div>
+            <div className="candidate-library">
+              {hasSavedResume ? (
+                <div className="candidate-resume-snapshot">
+                  <FileText size={17} />
+                  <p>{profile.resume_summary || '已保存简历文本，面试官会在自我介绍与项目题中自然参考。'}</p>
+                </div>
+              ) : (
+                <div className="muted-row">可在用户中心上传 PDF 或粘贴简历，之后会自动带入面试上下文。</div>
+              )}
+
+              {savedProjects.length > 0 && (
+                <div className="saved-project-list">
+                  {savedProjects.map((project) => {
+                    const active = selectedSavedProjectIds.includes(project.id)
+                    const disabled = !active && selectedRepoCount >= 3
+                    return (
+                      <button
+                        type="button"
+                        className={`saved-project-chip ${active ? 'active' : ''}`}
+                        key={project.id}
+                        disabled={disabled}
+                        onClick={() => toggleSavedProject(project.id)}
+                      >
+                        <Github size={14} />
+                        <span>{project.full_name}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           </section>
 
           <section className={`settings-field github-field ${repoExpanded ? 'expanded' : ''}`}>
@@ -1721,6 +1825,20 @@ function ProfilePage() {
       created_at: pendingInterview?.created_at || pendingCreatedAtRef.current,
     }
   }, [pendingInterview, pendingInterviewId])
+  const pdfInputRef = useRef(null)
+  const [profileData, setProfileData] = useState(null)
+  const [profileProjects, setProfileProjects] = useState([])
+  const [profileDraft, setProfileDraft] = useState({
+    display_name: '',
+    headline: '',
+    target_role: '',
+    resume_text: '',
+  })
+  const [profileLoading, setProfileLoading] = useState(true)
+  const [resumeSaving, setResumeSaving] = useState(false)
+  const [pdfUploading, setPdfUploading] = useState(false)
+  const [projectUrl, setProjectUrl] = useState('')
+  const [projectSaving, setProjectSaving] = useState(false)
 
   const withPendingRecord = useCallback(
     (records) => {
@@ -1741,10 +1859,39 @@ function ProfilePage() {
     [withPendingRecord],
   )
 
+  const applyProfileResponse = useCallback((data) => {
+    const nextProfile = data?.profile || {}
+    const nextProjects = Array.isArray(data?.projects) ? data.projects : []
+    setProfileData(nextProfile)
+    setProfileProjects(nextProjects)
+    setProfileDraft({
+      display_name: nextProfile.display_name || '',
+      headline: nextProfile.headline || '',
+      target_role: nextProfile.target_role || '',
+      resume_text: nextProfile.resume_text || '',
+    })
+  }, [])
+
+  const loadProfile = useCallback(async () => {
+    setProfileLoading(true)
+    try {
+      const { data } = await api.get('/profile')
+      applyProfileResponse(data)
+    } catch (error) {
+      toast(`无法加载用户资料：${getErrorMessage(error)}`, 'error')
+    } finally {
+      setProfileLoading(false)
+    }
+  }, [applyProfileResponse, toast])
+
   useEffect(() => {
     loadHistory({ includePending: Boolean(pendingRecord) })
       .catch((error) => toast(`无法加载历史记录：${getErrorMessage(error)}`, 'error'))
   }, [loadHistory, pendingRecord, toast])
+
+  useEffect(() => {
+    loadProfile()
+  }, [loadProfile])
 
   useEffect(() => {
     if (!pendingInterviewId || !pendingRecord || evaluationStartRef.current === pendingInterviewId) return undefined
@@ -1825,6 +1972,93 @@ function ProfilePage() {
     return (total / completedHistory.length).toFixed(1)
   }, [history])
   const topRole = history[0]?.role || '暂无'
+  const resumeReady = Boolean((profileData?.resume_summary || profileData?.resume_text || '').trim())
+  const profileSummary = profileData?.resume_summary || '保存简历后，面试官会在自我介绍、项目经历和场景题中自然参考。'
+  const profileSkills = Array.isArray(profileData?.skills) ? profileData.skills.slice(0, 8) : []
+
+  const updateProfileDraft = (field, value) => {
+    setProfileDraft((current) => ({ ...current, [field]: value }))
+  }
+
+  const saveResume = async () => {
+    const hasAnyProfileInput = Object.values(profileDraft).some((value) => String(value || '').trim())
+    if (!hasAnyProfileInput) {
+      toast('请先填写资料，或上传 PDF 自动识别。', 'warning')
+      return
+    }
+    setResumeSaving(true)
+    try {
+      const payload = {
+        display_name: profileDraft.display_name,
+        headline: profileDraft.headline,
+        target_role: profileDraft.target_role,
+        use_ai: Boolean(profileDraft.resume_text.trim()),
+      }
+      if (profileDraft.resume_text.trim()) payload.resume_text = profileDraft.resume_text
+      const { data } = await api.put(
+        '/profile/resume',
+        payload,
+        { timeout: 70000 },
+      )
+      applyProfileResponse(data)
+      toast('用户资料已保存。', 'success')
+    } catch (error) {
+      toast(`保存简历失败：${getErrorMessage(error)}`, 'error')
+    } finally {
+      setResumeSaving(false)
+    }
+  }
+
+  const uploadResumePdf = async (event) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    setPdfUploading(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      const { data } = await api.post('/profile/resume/pdf', formData, {
+        timeout: 90000,
+      })
+      applyProfileResponse(data)
+      toast('PDF 简历已识别并保存。', 'success')
+    } catch (error) {
+      toast(`PDF 识别失败：${getErrorMessage(error)}`, 'error')
+    } finally {
+      setPdfUploading(false)
+      if (pdfInputRef.current) pdfInputRef.current.value = ''
+    }
+  }
+
+  const addProfileProject = async () => {
+    if (!projectUrl.trim()) {
+      toast('请输入 GitHub 仓库地址。', 'warning')
+      return
+    }
+    setProjectSaving(true)
+    try {
+      const { data } = await api.post('/profile/projects', { url: projectUrl.trim() }, { timeout: 30000 })
+      setProfileProjects((current) => {
+        const withoutDuplicate = current.filter((item) => item.id !== data.id && item.full_name !== data.full_name)
+        return [data, ...withoutDuplicate]
+      })
+      setProjectUrl('')
+      toast('GitHub 项目已保存。', 'success')
+    } catch (error) {
+      toast(`添加项目失败：${getErrorMessage(error)}`, 'error')
+    } finally {
+      setProjectSaving(false)
+    }
+  }
+
+  const deleteProfileProject = async (projectId) => {
+    try {
+      await api.delete(`/profile/projects/${projectId}`)
+      setProfileProjects((current) => current.filter((project) => project.id !== projectId))
+      toast('项目已移除。', 'success')
+    } catch (error) {
+      toast(`移除项目失败：${getErrorMessage(error)}`, 'error')
+    }
+  }
 
   useDampedSnapScroll(pageRef)
 
@@ -1832,30 +2066,137 @@ function ProfilePage() {
     <div className="page enter-page profile-page review-snap-page" ref={pageRef}>
       <section className="review-snap-section profile-snap-overview">
         <PageHeader
-          eyebrow="成长记录"
-          title="能力历史"
-          subtitle="按岗位和难度观察最近表现。"
+          eyebrow="用户中心"
+          title="个人资料"
+          subtitle="把简历和项目长期沉淀下来，之后配置面试时可以直接复用。"
           action={
-            <button className="button primary" onClick={() => navigate('/dashboard')}>
-              <Play size={16} />
-              新面试
-            </button>
+            <div className="action-row">
+              <button className="button ghost" onClick={() => pdfInputRef.current?.click()} disabled={pdfUploading}>
+                {pdfUploading ? <LoaderCircle className="spin" size={16} /> : <FileText size={16} />}
+                上传 PDF
+              </button>
+              <button className="button primary" onClick={() => navigate('/dashboard')}>
+                <Play size={16} />
+                新面试
+              </button>
+            </div>
           }
         />
 
         <div className="profile-summary-band">
-          <div className="stats-grid">
+          <div className="stats-grid profile-stats-grid">
+            <StatCard icon={<FileText size={20} />} label="简历资料" value={profileLoading ? '读取中' : resumeReady ? '已完善' : '未填写'} compact />
+            <StatCard icon={<Github size={20} />} label="GitHub 项目" value={profileProjects.length} />
             <StatCard icon={<CalendarClock size={20} />} label="总面试次数" value={history.length} />
             <StatCard icon={<Gauge size={20} />} label="平均综合得分" value={averageScore} />
-            <StatCard icon={<Trophy size={20} />} label="最近岗位" value={topRole} compact />
           </div>
         </div>
 
+        <input ref={pdfInputRef} className="sr-only" type="file" accept="application/pdf" onChange={uploadResumePdf} />
+
+        <div className="profile-center-grid">
+          <section className="profile-data-panel resume-panel">
+            <div className="panel-head">
+              <div>
+                <h2>简历资料</h2>
+                <p>支持手动输入，也支持 PDF 文本识别后由 AI 整理摘要。</p>
+              </div>
+              <button className="button ghost small" onClick={saveResume} disabled={resumeSaving || pdfUploading}>
+                {resumeSaving ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}
+                保存资料
+              </button>
+            </div>
+
+            <div className="profile-form-grid">
+              <input
+                value={profileDraft.display_name}
+                placeholder="姓名 / 昵称"
+                onChange={(event) => updateProfileDraft('display_name', event.target.value)}
+              />
+              <input
+                value={profileDraft.target_role}
+                placeholder="目标岗位"
+                onChange={(event) => updateProfileDraft('target_role', event.target.value)}
+              />
+            </div>
+            <input
+              value={profileDraft.headline}
+              placeholder="一句话定位，例如：Java 后端方向，关注并发与工程化"
+              onChange={(event) => updateProfileDraft('headline', event.target.value)}
+            />
+            <textarea
+              className="resume-textarea"
+              value={profileDraft.resume_text}
+              placeholder="粘贴简历正文，或点击右上角上传 PDF。保存后会自动提取技能、经历和项目摘要。"
+              onChange={(event) => updateProfileDraft('resume_text', event.target.value)}
+            />
+
+            <div className="resume-ai-summary">
+              <span>AI 摘要</span>
+              <p>{profileSummary}</p>
+              {profileSkills.length > 0 && (
+                <div className="profile-skill-list">
+                  {profileSkills.map((skill) => (
+                    <span key={skill}>{skill}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="profile-data-panel project-panel">
+            <div className="panel-head">
+              <div>
+                <h2>GitHub 项目库</h2>
+                <p>保存常用项目，面试配置时可直接勾选进入项目深挖。</p>
+              </div>
+              <span className="profile-count">{profileProjects.length}/{PROFILE_PROJECT_LIMIT}</span>
+            </div>
+
+            <div className="profile-project-input">
+              <Github size={16} />
+              <input
+                value={projectUrl}
+                placeholder="https://github.com/owner/repo"
+                onChange={(event) => setProjectUrl(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') addProfileProject()
+                }}
+              />
+              <button className="button ghost small" onClick={addProfileProject} disabled={projectSaving || profileProjects.length >= PROFILE_PROJECT_LIMIT}>
+                {projectSaving ? <LoaderCircle className="spin" size={15} /> : <Plus size={15} />}
+                添加
+              </button>
+            </div>
+
+            <div className="profile-project-list">
+              {profileProjects.length ? (
+                profileProjects.map((project) => (
+                  <article className="profile-project-card" key={project.id}>
+                    <div>
+                      <b>{project.full_name}</b>
+                      <span>{project.main_language || '未知语言'} · 星标 {project.stars || 0}</span>
+                      <p>{project.description || '暂无描述'}</p>
+                    </div>
+                    <button className="icon-button" onClick={() => deleteProfileProject(project.id)} title="移除项目">
+                      <X size={16} />
+                    </button>
+                  </article>
+                ))
+              ) : (
+                <EmptyState text="还没有保存 GitHub 项目" compact />
+              )}
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section className="review-snap-section profile-snap-records">
         <section className="panel chart-panel">
           <div className="panel-head">
             <div>
               <h2>近期成长曲线</h2>
-              <p>综合得分会随筛选条件即时更新。</p>
+              <p>最近岗位：{topRole}。综合得分会随筛选条件即时更新。</p>
             </div>
             <div className="filter-row">
               <FilterSelect
@@ -1875,12 +2216,10 @@ function ProfilePage() {
           {history.some(isHistoryCompleted) ? (
             <HistoryLineChart history={history} filterRole={filterRole} filterDifficulty={filterDifficulty} />
           ) : (
-            <EmptyState text={history.length ? '报告生成完成后会更新曲线' : '暂无面试数据'} />
+            <EmptyState text={history.length ? '报告生成完成后会更新曲线' : '暂无面试数据'} compact />
           )}
         </section>
-      </section>
 
-      <section className="review-snap-section profile-snap-records">
         <section className="panel history-panel">
           <div className="panel-head">
             <div>
@@ -3701,7 +4040,7 @@ function statusTone(value) {
 function routeName(pathname) {
   if (pathname.startsWith('/dashboard')) return '模拟面试'
   if (pathname.startsWith('/code')) return '代码练习'
-  if (pathname.startsWith('/profile')) return '能力历史'
+  if (pathname.startsWith('/profile')) return '用户中心'
   if (pathname.startsWith('/report')) return '评估报告'
   return '工作台'
 }

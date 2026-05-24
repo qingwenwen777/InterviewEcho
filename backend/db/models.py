@@ -11,6 +11,46 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     created_at = Column(TIMESTAMP, default=datetime.utcnow)
 
+
+class UserProfile(Base):
+    __tablename__ = "user_profiles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    display_name = Column(String(80), nullable=True)
+    headline = Column(String(160), nullable=True)
+    target_role = Column(String(80), nullable=True)
+    resume_filename = Column(String(255), nullable=True)
+    resume_text = Column(Text, nullable=True)
+    resume_summary = Column(Text, nullable=True)
+    skills = Column(Text, nullable=True)
+    education = Column(Text, nullable=True)
+    experience = Column(Text, nullable=True)
+    projects = Column(Text, nullable=True)
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User")
+
+
+class UserProject(Base):
+    __tablename__ = "user_projects"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    url = Column(String(255), nullable=False)
+    full_name = Column(String(160), nullable=False)
+    name = Column(String(120), nullable=True)
+    description = Column(Text, nullable=True)
+    main_language = Column(String(80), nullable=True)
+    stars = Column(Integer, default=0)
+    tech_keywords = Column(Text, nullable=True)
+    summary_json = Column(Text, nullable=True)
+    created_at = Column(TIMESTAMP, default=datetime.utcnow)
+    updated_at = Column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User")
+
 class Question(Base):
     __tablename__ = "questions"
 

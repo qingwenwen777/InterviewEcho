@@ -78,6 +78,36 @@ def _summary_matches_url(summary: dict, url: str) -> bool:
     return any(_normalize_url(candidate) == target for candidate in candidates if candidate)
 
 
+def _candidate_context_for_prompt(db: Session, user_id: int) -> str:
+    profile = db.query(models.UserProfile).filter(models.UserProfile.user_id == user_id).first()
+    lines = []
+    if profile:
+        if profile.resume_summary:
+            lines.append(f"简历摘要：{profile.resume_summary}")
+        skills = _safe_json_loads(profile.skills, [])
+        if skills:
+            lines.append("技能关键词：" + "、".join(str(item) for item in skills[:10]))
+        experience = _safe_json_loads(profile.experience, [])
+        if experience:
+            lines.append("经历亮点：" + "；".join(str(item) for item in experience[:4]))
+        profile_projects = _safe_json_loads(profile.projects, [])
+        if profile_projects:
+            lines.append("简历项目：" + "；".join(str(item) for item in profile_projects[:3]))
+    return "\n".join(lines)[:2600]
+
+
+def _knowledge_points_for_prompt(db: Session, interview: models.Interview, user_id: int) -> str:
+    candidate_context = _candidate_context_for_prompt(db, user_id)
+    if not candidate_context:
+        return interview.knowledge_points or "[]"
+    return (
+        f"{interview.knowledge_points or '[]'}\n\n"
+        "【候选人长期资料】\n"
+        f"{candidate_context}\n"
+        "请在自我介绍、项目经历、场景题中自然参考这些信息，避免机械复述简历。"
+    )
+
+
 _QUESTION_NOISE_RE = re.compile(r"[\s\W_]+", re.UNICODE)
 
 
@@ -334,7 +364,8 @@ async def start_interview(data: schemas.InterviewStart, db: Session = Depends(ge
     db.refresh(new_interview)
 
     # Round 0: Only Introduction request (First sentence, no questions yet)
-    greeting = f"你好，我是你的{data.role}面试官。很高兴见到你。本次面试共设定为 {data.total_rounds} 轮提问。在正式开始前，请先做一个简单的自我介绍。"
+    profile_note = "我也会结合你在用户中心保存的简历资料来观察匹配度。" if _candidate_context_for_prompt(db, user_id) else ""
+    greeting = f"你好，我是你的{data.role}面试官。很高兴见到你。本次面试共设定为 {data.total_rounds} 轮提问。{profile_note}在正式开始前，请先做一个简单的自我介绍。"
     ai_msg = models.Message(interview_id=new_interview.id, sender="ai", content=greeting, category="introduction")
     db.add(ai_msg)
     db.commit()
@@ -796,7 +827,7 @@ async def process_message_logic(interview_id: int, content: str, db: Session, us
             conversation_history=history_str,
             target_next_question=target_next_text,
             difficulty=interview.difficulty,
-            knowledge_points=interview.knowledge_points,
+            knowledge_points=_knowledge_points_for_prompt(db, interview, user_id),
             force_next_instruction=force_next
         )
         if current_stage == "project" and has_custom:
