@@ -393,6 +393,19 @@ h6 {
   white-space: nowrap;
 }
 
+button.user-chip {
+  appearance: none;
+  cursor: pointer;
+  font: inherit;
+  transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+}
+
+button.user-chip:hover {
+  border-color: #bfb9ad;
+  background: #fffdf7;
+  transform: translateY(-1px);
+}
+
 .user-chip svg {
   color: #000;
 }
@@ -5769,6 +5782,22 @@ strong {
   align-items: stretch;
 }
 
+.account-page {
+  width: min(1320px, 100%);
+}
+
+.account-page .page-header {
+  margin-top: 18px;
+}
+
+.account-summary-band {
+  margin-bottom: 28px;
+}
+
+.account-center-grid {
+  align-items: start;
+}
+
 .profile-data-panel {
   display: flex;
   min-width: 0;
@@ -5778,6 +5807,10 @@ strong {
   border: 1px solid rgba(0, 0, 0, 0.09);
   border-radius: 22px;
   background: rgba(255, 255, 255, 0.42);
+}
+
+.account-page .profile-data-panel {
+  min-height: 420px;
 }
 
 .profile-form-grid {
@@ -5799,6 +5832,23 @@ strong {
   min-height: 176px;
   resize: vertical;
   line-height: 1.7;
+}
+
+.resume-editor {
+  display: grid;
+  gap: 12px;
+}
+
+.account-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.resume-profile-view {
+  display: grid;
+  gap: 14px;
 }
 
 .resume-ai-summary {
@@ -5827,6 +5877,10 @@ strong {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.account-page .profile-skill-list {
+  padding-top: 2px;
 }
 
 .profile-skill-list span {
@@ -5863,6 +5917,10 @@ strong {
   gap: 10px;
   overflow-y: auto;
   padding-right: 4px;
+}
+
+.account-page .profile-project-list {
+  max-height: 430px;
 }
 
 .profile-project-card {
@@ -5904,6 +5962,19 @@ strong {
   width: 34px;
   height: 34px;
   flex: 0 0 auto;
+}
+
+.account-empty-note {
+  display: grid;
+  min-height: 126px;
+  place-items: center;
+  padding: 22px;
+  border: 1px dashed rgba(0, 0, 0, 0.16);
+  border-radius: 18px;
+  color: #777973;
+  font-size: 14px;
+  line-height: 1.7;
+  text-align: center;
 }
 
 .profile-snap-records .chart-panel {
