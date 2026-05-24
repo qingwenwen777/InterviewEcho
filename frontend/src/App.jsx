@@ -4156,7 +4156,7 @@ function average(values) {
 
 function getErrorMessage(error) {
   if (error?.code === 'ERR_NETWORK' || error?.message === 'Network Error') {
-    return '后端服务未启动或无法访问，请先确认 http://localhost:8000 正常运行'
+    return '后端服务暂时无法访问，请刷新页面或稍后重试'
   }
   const detail = error?.response?.data?.detail
   if (Array.isArray(detail)) return detail.map((item) => item.msg || item.message || JSON.stringify(item)).join('；')

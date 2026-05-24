@@ -6264,6 +6264,11 @@ strong {
   border-bottom: 1px solid var(--line);
 }
 
+.code-page .page-header {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
 .code-page .page-header h1,
 .code-detail-title h1 {
   margin-top: 12px;
