@@ -595,7 +595,7 @@ PLACEHOLDER_SPECS = [
 ]
 
 
-def build_placeholder_problem(index, spec):
+def _build_legacy_placeholder_problem(index, spec):
     title, slug, difficulty, tags = spec
     topic = "、".join(tags)
     return {
@@ -618,6 +618,12 @@ def build_placeholder_problem(index, spec):
         "starter_code": deepcopy(BASE_STARTER_CODE),
         "test_cases": [],
     }
+
+
+def build_placeholder_problem(index, spec):
+    from .code_problem_practice_bank import build_practice_problem
+
+    return build_practice_problem(index, spec, problem, tc)
 
 
 def get_hot100_problems():
