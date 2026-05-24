@@ -178,6 +178,9 @@ const wait = (ms) =>
   new Promise((resolve) => {
     window.setTimeout(resolve, ms)
   })
+const VOICE_REPLY_POLL_INTERVAL_MS = 1000
+const VOICE_REPLY_MAX_POLL_ATTEMPTS = 90
+const VOICE_REPLY_MAX_POLL_FAILURES = 5
 const isCodeFinalStatus = (status) => Boolean(status) && !CODE_PENDING_STATUSES.has(status)
 const toCodeSubmissionResult = (detail) => ({
   submission_id: detail.id,
@@ -1570,23 +1573,33 @@ function InterviewRoom() {
       if (data.ai_message) {
         setMessages((current) => [...current, data.ai_message])
       } else if (userMessageId) {
-        for (let attempt = 0; attempt < 45; attempt += 1) {
-          await wait(1000)
-          const messagesRes = await api.get(`/interview/${interviewId}/messages`)
-          const nextMessages = Array.isArray(messagesRes.data) ? messagesRes.data : []
-          setMessages(nextMessages)
-          const aiReply = nextMessages.find(
-            (message) => message.sender === 'ai' && Number(message.id) > Number(userMessageId),
-          )
-          if (aiReply) {
-            if (aiReply.is_final) {
-              toast('已达到建议轮次，准备生成报告。', 'warning')
-              window.setTimeout(endInterview, 1200)
+        let pollFailures = 0
+        for (let attempt = 0; attempt < VOICE_REPLY_MAX_POLL_ATTEMPTS; attempt += 1) {
+          await wait(VOICE_REPLY_POLL_INTERVAL_MS)
+          try {
+            const messagesRes = await api.get(`/interview/${interviewId}/messages`)
+            pollFailures = 0
+            const nextMessages = Array.isArray(messagesRes.data) ? messagesRes.data : []
+            setMessages(nextMessages)
+            const aiReply = nextMessages.find(
+              (message) => message.sender === 'ai' && Number(message.id) > Number(userMessageId),
+            )
+            if (aiReply) {
+              if (aiReply.is_final) {
+                toast('已达到建议轮次，准备生成报告。', 'warning')
+                window.setTimeout(endInterview, 1200)
+              }
+              return
             }
-            return
+          } catch (pollError) {
+            pollFailures += 1
+            if (pollFailures >= VOICE_REPLY_MAX_POLL_FAILURES) {
+              toast(`语音已转写，但拉取 AI 回复失败：${getErrorMessage(pollError)}`, 'warning')
+              return
+            }
           }
         }
-        toast('语音已转写，AI 回复仍在生成中。', 'info')
+        toast('语音已转写，AI 回复生成较慢，你可以稍后刷新查看。', 'info')
       }
       if (data.ai_message?.is_final) {
         toast('已达到建议轮次，准备生成报告。', 'warning')

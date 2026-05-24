@@ -1,4 +1,5 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, UploadFile, File
+import asyncio
 import uuid
 import shutil
 import tempfile
@@ -19,6 +20,8 @@ from db.database import SessionLocal, get_db
 from datetime import datetime
 
 router = APIRouter()
+
+VOICE_POLISH_TIMEOUT_SECONDS = 8.0
 
 def _safe_json_loads(value, default):
     if not value:
@@ -448,6 +451,38 @@ def _store_voice_metrics(db: Session, interview_id: int, message_id: int, audio_
     print(f"[voice_metrics] saved for interview={interview_id}, message={message_id}, wpm={metrics['wpm']}")
 
 
+def _has_ai_reply_after(db: Session, interview_id: int, user_msg_id: int) -> bool:
+    return db.query(models.Message).filter(
+        models.Message.interview_id == interview_id,
+        models.Message.sender == "ai",
+        models.Message.id > user_msg_id,
+    ).first() is not None
+
+
+def _store_voice_reply_fallback(db: Session, interview_id: int, user_id: int, user_msg_id: int) -> None:
+    if _has_ai_reply_after(db, interview_id, user_msg_id):
+        return
+
+    interview = db.query(models.Interview).filter(
+        models.Interview.id == interview_id,
+        models.Interview.user_id == user_id,
+    ).first()
+    role_text = interview.role if interview else "目标岗位"
+    fallback_text = (
+        "刚才生成追问时出现了短暂异常，我们先继续保持面试节奏。"
+        f"下一题：请结合{role_text}的实际工作场景，说明一次你定位并解决技术问题的过程。"
+    )
+    ai_msg = models.Message(
+        interview_id=interview_id,
+        sender="ai",
+        content=fallback_text,
+        category="voice_fallback",
+    )
+    db.add(ai_msg)
+    db.commit()
+    print(f"[voice_reply_job] fallback AI message saved for interview={interview_id}, user_message={user_msg_id}")
+
+
 async def _run_voice_reply_job(interview_id: int, user_id: int, user_msg_id: int, audio_path: str, stt_result: dict):
     db = SessionLocal()
     try:
@@ -461,24 +496,34 @@ async def _run_voice_reply_job(interview_id: int, user_id: int, user_msg_id: int
             return
 
         try:
-            polished = await polish_text(user_msg.content or "")
+            polished = await asyncio.wait_for(
+                polish_text(user_msg.content or ""),
+                timeout=VOICE_POLISH_TIMEOUT_SECONDS,
+            )
             if polished and polished != user_msg.content:
                 user_msg.content = polished
                 stt_result = {**(stt_result or {}), "text": polished}
                 db.commit()
+        except asyncio.TimeoutError:
+            print(f"[voice_reply_job] polish timeout after {VOICE_POLISH_TIMEOUT_SECONDS}s; using raw transcript")
         except Exception as e:
             print(f"[voice_reply_job] polish failed: {type(e).__name__}: {e}")
-
-        try:
-            _store_voice_metrics(db, interview_id, user_msg_id, audio_path, stt_result)
-        except Exception as e:
-            print(f"[voice_metrics] analyze failed: {type(e).__name__}: {e}")
-            db.rollback()
 
         try:
             await process_message_logic(interview_id, user_msg.content or "", db, user_id, user_msg=user_msg)
         except Exception as e:
             print(f"[voice_reply_job] AI reply failed: {type(e).__name__}: {e}")
+            db.rollback()
+            try:
+                _store_voice_reply_fallback(db, interview_id, user_id, user_msg_id)
+            except Exception as fallback_error:
+                db.rollback()
+                print(f"[voice_reply_job] fallback save failed: {type(fallback_error).__name__}: {fallback_error}")
+
+        try:
+            _store_voice_metrics(db, interview_id, user_msg_id, audio_path, stt_result)
+        except Exception as e:
+            print(f"[voice_metrics] analyze failed: {type(e).__name__}: {e}")
             db.rollback()
     finally:
         db.close()
