@@ -2079,27 +2079,14 @@ function AccountPage() {
       <PageHeader
         eyebrow="用户中心"
         title="个人资料"
-        subtitle="把简历和项目长期沉淀下来，之后配置面试时可以直接复用。"
-        action={
-          <div className="action-row">
-            <button className="button ghost" onClick={() => setResumeEditorOpen(true)}>
-              <FileText size={16} />
-              手动输入
-            </button>
-            <button className="button ghost" onClick={() => pdfInputRef.current?.click()} disabled={pdfUploading}>
-              {pdfUploading ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />}
-              上传 PDF
-            </button>
-          </div>
-        }
       />
 
       <div className="profile-summary-band account-summary-band">
         <div className="stats-grid profile-stats-grid">
-          <StatCard icon={<UserRound size={20} />} label="当前用户" value={profileDisplayName} compact />
-          <StatCard icon={<FileText size={20} />} label="简历资料" value={profileLoading ? '读取中' : resumeReady ? '已完善' : '未填写'} compact />
-          <StatCard icon={<Github size={20} />} label="GitHub 项目" value={profileProjects.length} />
-          <StatCard icon={<Gauge size={20} />} label="目标岗位" value={profileData?.target_role || '未设置'} compact />
+          <StatCard label="当前用户" value={profileDisplayName} compact plain />
+          <StatCard label="简历资料" value={profileLoading ? '读取中' : resumeReady ? '已完善' : '未填写'} compact plain />
+          <StatCard label="GitHub 项目" value={profileProjects.length} plain />
+          <StatCard label="目标岗位" value={profileData?.target_role || '未设置'} compact plain />
         </div>
       </div>
 
@@ -2110,11 +2097,15 @@ function AccountPage() {
           <div className="panel-head">
             <div>
               <h2>简历资料</h2>
-              <p>支持手动输入，也支持 PDF 文本识别后由 AI 整理摘要。</p>
             </div>
-            <button className="button ghost small" onClick={() => setResumeEditorOpen((value) => !value)}>
-              {resumeEditorOpen ? '收起' : resumeReady ? '编辑' : '手动输入'}
-            </button>
+            <div className="account-card-actions">
+              <button className="button ghost small" onClick={() => setResumeEditorOpen((value) => !value)}>
+                {resumeEditorOpen ? '收起' : resumeReady ? '编辑' : '手动输入'}
+              </button>
+              <button className="button ghost small" onClick={() => pdfInputRef.current?.click()} disabled={pdfUploading}>
+                {pdfUploading ? '上传中' : '上传 PDF'}
+              </button>
+            </div>
           </div>
 
           {resumeEditorOpen ? (
@@ -2147,8 +2138,7 @@ function AccountPage() {
                   取消
                 </button>
                 <button className="button primary" onClick={saveResume} disabled={resumeSaving || pdfUploading}>
-                  {resumeSaving ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />}
-                  保存资料
+                  {resumeSaving ? '保存中' : '保存资料'}
                 </button>
               </div>
             </div>
@@ -2165,7 +2155,7 @@ function AccountPage() {
                   ))}
                 </div>
               ) : (
-                <div className="account-empty-note">还没有技能摘要。可以上传 PDF，或点击“手动输入”补充简历。</div>
+                <div className="account-empty-note">暂无简历摘要</div>
               )}
             </div>
           )}
@@ -2175,7 +2165,6 @@ function AccountPage() {
           <div className="panel-head">
             <div>
               <h2>GitHub 项目库</h2>
-              <p>保存常用项目，面试配置时可直接勾选进入项目深挖。</p>
             </div>
             <button
               className="button ghost small"
@@ -2188,7 +2177,6 @@ function AccountPage() {
 
           {projectInputOpen && (
             <div className="profile-project-input">
-              <Github size={16} />
               <input
                 value={projectUrl}
                 placeholder="https://github.com/owner/repo"
@@ -2198,8 +2186,7 @@ function AccountPage() {
                 }}
               />
               <button className="button ghost small" onClick={addProfileProject} disabled={projectSaving || profileProjects.length >= PROFILE_PROJECT_LIMIT}>
-                {projectSaving ? <LoaderCircle className="spin" size={15} /> : <Plus size={15} />}
-                保存
+                {projectSaving ? '保存中' : '保存'}
               </button>
             </div>
           )}
@@ -2219,7 +2206,7 @@ function AccountPage() {
                 </article>
               ))
             ) : (
-              <div className="account-empty-note">还没有保存 GitHub 项目。点击“添加项目”后粘贴公开仓库地址即可。</div>
+              <div className="account-empty-note">暂无 GitHub 项目</div>
             )}
           </div>
         </section>
@@ -4004,14 +3991,14 @@ function InfoCard({ icon, title, text }) {
   )
 }
 
-function StatCard({ icon, label, value, compact }) {
+function StatCard({ icon, label, value, compact, plain = false }) {
   return (
-    <article className={`stat-card ${compact ? 'compact' : ''}`}>
+    <article className={`stat-card ${compact ? 'compact' : ''} ${plain ? 'plain' : ''}`}>
       <div>
         <span>{label}</span>
         <b>{value}</b>
       </div>
-      <div className="stat-icon">{icon}</div>
+      {icon && <div className="stat-icon">{icon}</div>}
     </article>
   )
 }
