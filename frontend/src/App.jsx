@@ -1124,7 +1124,6 @@ function DashboardPage() {
       <PageHeader
         eyebrow="面试大厅"
         title="选择目标岗位"
-        subtitle="每个岗位会调用后端题库、知识点与评估链路。"
         action={
           <button className="button ghost" onClick={() => navigate('/profile')}>
             <History size={16} />
@@ -2351,7 +2350,6 @@ function ProfilePage() {
         <PageHeader
           eyebrow="成长记录"
           title="能力历史"
-          subtitle="按岗位和难度观察最近表现。"
           action={
             <button className="button primary" onClick={() => navigate('/dashboard')}>
               <Play size={16} />
@@ -2372,7 +2370,6 @@ function ProfilePage() {
           <div className="panel-head">
             <div>
               <h2>近期成长曲线</h2>
-              <p>综合得分会随筛选条件即时更新。</p>
             </div>
             <div className="filter-row">
               <FilterSelect ariaLabel="筛选岗位" value={filterRole} options={roleFilterOptions} onChange={setFilterRole} />
@@ -2392,7 +2389,6 @@ function ProfilePage() {
           <div className="panel-head">
             <div>
               <h2>面试历史记录</h2>
-              <p>报告页会重新拉取后端评估详情。</p>
             </div>
           </div>
           <div className="table-wrap">
@@ -3243,24 +3239,20 @@ function CodePracticePage() {
       <PageHeader
         eyebrow="Hot100 ACM"
         title="代码练习"
-        subtitle="用完整程序读写 stdin/stdout，补上现场编码的最后一块肌肉记忆。"
       />
 
       <section className="code-hero-strip">
         <div>
           <span>Hot100</span>
           <strong>{problems.length || 100}</strong>
-          <p>高频算法题型</p>
         </div>
         <div>
           <span>Ready</span>
           <strong>{judgableCount}</strong>
-          <p>已开放完整判题</p>
         </div>
         <div>
           <span>Accepted</span>
           <strong>{solvedCount}</strong>
-          <p>当前账号通过</p>
         </div>
       </section>
 
@@ -3278,7 +3270,6 @@ function CodePracticePage() {
           <div className="code-section-head">
             <div>
               <h2>题目列表</h2>
-              <p>简洁题面，ACM 输入输出，不依赖函数签名。</p>
             </div>
           </div>
 
@@ -3322,7 +3313,6 @@ function CodePracticePage() {
           <div className="code-section-head compact">
             <div>
               <h2>最近提交</h2>
-              <p>只展示正式提交，不记录样例运行。</p>
             </div>
           </div>
           {historyLoading ? (
@@ -3745,7 +3735,6 @@ function CodeProblemPage() {
             <div className="code-section-head compact">
               <div>
                 <h2>提交历史</h2>
-                <p>最近 80 次正式提交。</p>
               </div>
             </div>
             {submissions.length ? (
