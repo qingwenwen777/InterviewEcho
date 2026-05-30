@@ -36,12 +36,12 @@ async def _create_chat_completion(timeout_seconds: float | None = None, **kwargs
     )
 
 
-async def generate_llm_response(role, question, expected_points, conversation_history, target_next_question, difficulty="medium", knowledge_points="", force_next_instruction=""):
+async def _build_interviewer_system_prompt(role, question, expected_points, conversation_history, target_next_question, difficulty, knowledge_points, force_next_instruction):
+    """Run RAG retrieval and assemble the interviewer system prompt.
+
+    Shared by both the blocking and streaming response generators so the prompt
+    stays identical regardless of transport.
     """
-    Generate conversational follow-up or next question using AI logic.
-    Returns: {"action": "FOLLOW_UP" | "MOVE_NEXT", "text": "..."}
-    """
-    # 1. Query RAG for expert context
     # Use the current question and the last user message as query for better relevance
     last_user_msg = ""
     if isinstance(conversation_history, list):
@@ -56,12 +56,11 @@ async def generate_llm_response(role, question, expected_points, conversation_hi
             if "候选人:" in line:
                 last_user_msg = line.split("候选人:")[-1].strip()
                 break
-            
+
     rag_query = f"{question} {last_user_msg}"
     rag_context = await rag_service.query_context_async(rag_query)
 
-    # 2. Get system prompt template
-    system_prompt = prompt_manager.get_interviewer_prompt(
+    return prompt_manager.get_interviewer_prompt(
         role=role,
         question=question,
         expected_points=expected_points,
@@ -70,9 +69,73 @@ async def generate_llm_response(role, question, expected_points, conversation_hi
         difficulty=difficulty,
         knowledge_points=knowledge_points,
         force_next_instruction=force_next_instruction,
-        rag_context=rag_context
+        rag_context=rag_context,
     )
-    
+
+
+def _extract_partial_json_string(buffer: str, key: str):
+    """Incrementally pull a string field out of an in-progress JSON object.
+
+    Returns (value, complete). ``value`` is the decoded partial string, or None
+    if the field has not started yet. ``complete`` is True once the closing
+    quote has been parsed. Designed to be called repeatedly on a growing buffer
+    while a JSON response streams in.
+    """
+    marker = f'"{key}"'
+    key_idx = buffer.find(marker)
+    if key_idx == -1:
+        return None, False
+
+    i = key_idx + len(marker)
+    n = len(buffer)
+    while i < n and buffer[i] in " \t\r\n":
+        i += 1
+    if i >= n or buffer[i] != ":":
+        return None, False
+    i += 1
+    while i < n and buffer[i] in " \t\r\n":
+        i += 1
+    if i >= n or buffer[i] != '"':
+        return None, False
+    i += 1  # first char of the value
+
+    escapes = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f"}
+    out = []
+    while i < n:
+        c = buffer[i]
+        if c == "\\":
+            if i + 1 >= n:
+                break  # incomplete escape; wait for more
+            nxt = buffer[i + 1]
+            if nxt == "u":
+                if i + 6 <= n:
+                    try:
+                        out.append(chr(int(buffer[i + 2:i + 6], 16)))
+                    except ValueError:
+                        pass
+                    i += 6
+                    continue
+                break  # incomplete \uXXXX; wait for more
+            out.append(escapes.get(nxt, nxt))
+            i += 2
+            continue
+        if c == '"':
+            return "".join(out), True
+        out.append(c)
+        i += 1
+    return "".join(out), False
+
+
+async def generate_llm_response(role, question, expected_points, conversation_history, target_next_question, difficulty="medium", knowledge_points="", force_next_instruction=""):
+    """
+    Generate conversational follow-up or next question using AI logic.
+    Returns: {"action": "FOLLOW_UP" | "MOVE_NEXT", "text": "..."}
+    """
+    system_prompt = await _build_interviewer_system_prompt(
+        role, question, expected_points, conversation_history,
+        target_next_question, difficulty, knowledge_points, force_next_instruction,
+    )
+
     try:
         response = await _create_chat_completion(
             model=settings.LLM_MODEL,
@@ -91,6 +154,67 @@ async def generate_llm_response(role, question, expected_points, conversation_hi
             "action": "MOVE_NEXT",
             "text": "抱歉，刚才信号有点不好。我们直接看下一个话题： " + target_next_question
         }
+
+
+async def generate_llm_response_stream(role, question, expected_points, conversation_history, target_next_question, difficulty="medium", knowledge_points="", force_next_instruction=""):
+    """Streaming variant of :func:`generate_llm_response`.
+
+    Async generator yielding event dicts:
+      - {"type": "delta", "text": "<new fragment of the spoken text>"}
+      - {"type": "done", "action": "...", "text": "<full spoken text>"}
+
+    The model returns a JSON object ``{thought, action, text}``; only the value
+    of ``text`` is streamed to the candidate. On any failure a single ``done``
+    event with a graceful fallback is emitted so callers always terminate.
+    """
+    fallback_text = "抱歉，刚才信号有点不好。我们直接看下一个话题： " + target_next_question
+    try:
+        system_prompt = await _build_interviewer_system_prompt(
+            role, question, expected_points, conversation_history,
+            target_next_question, difficulty, knowledge_points, force_next_instruction,
+        )
+
+        stream = await asyncio.wait_for(
+            client.chat.completions.create(
+                model=settings.LLM_MODEL,
+                messages=[{"role": "system", "content": system_prompt}],
+                response_format={"type": "json_object"},
+                stream=True,
+            ),
+            timeout=LLM_CALL_TIMEOUT_SECONDS,
+        )
+
+        buffer = ""
+        emitted = 0
+        async for event in stream:
+            choices = getattr(event, "choices", None)
+            if not choices:
+                continue
+            delta = choices[0].delta.content if choices[0].delta else None
+            if not delta:
+                continue
+            buffer += delta
+            current_text, _complete = _extract_partial_json_string(buffer, "text")
+            if current_text is not None and len(current_text) > emitted:
+                yield {"type": "delta", "text": current_text[emitted:]}
+                emitted = len(current_text)
+
+        action = "MOVE_NEXT"
+        text = ""
+        try:
+            data = json.loads(buffer)
+            action = data.get("action", "MOVE_NEXT")
+            text = data.get("text", "")
+        except Exception:
+            # Fall back to whatever we managed to extract while streaming.
+            text, _ = _extract_partial_json_string(buffer, "text")
+            text = text or ""
+        if not text:
+            text = "好了，我们进行下一个话题。"
+        yield {"type": "done", "action": action, "text": text}
+    except Exception as e:
+        print(f"Error streaming LLM: {type(e).__name__}: {e}")
+        yield {"type": "done", "action": "MOVE_NEXT", "text": fallback_text}
 
 async def polish_text(text: str):
     """

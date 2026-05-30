@@ -107,6 +107,19 @@ class VoiceResponse(BaseModel):
     reply_status: str = "processing"
 
 
+class TTSRequest(BaseModel):
+    voice: Optional[str] = "mimo_default"
+    speed: Optional[str] = "normal"
+    style: Optional[str] = "calm"
+
+
+class TTSResponse(BaseModel):
+    audio_base64: str
+    mime_type: str = "audio/wav"
+    format: str = "wav"
+    voice: str = "mimo_default"
+
+
 class ProfileResumeUpdate(BaseModel):
     display_name: Optional[str] = None
     headline: Optional[str] = None

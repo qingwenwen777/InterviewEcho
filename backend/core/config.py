@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     ASR_MAX_AUDIO_BYTES: int = int(os.getenv("ASR_MAX_AUDIO_BYTES", "10485760"))
     VOICE_UPLOAD_DIR: str = os.getenv("VOICE_UPLOAD_DIR", "")
 
+    MIMO_API_KEY: str = os.getenv("MIMO_API_KEY", "")
+    MIMO_BASE_URL: str = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
+    MIMO_TTS_MODEL: str = os.getenv("MIMO_TTS_MODEL", "mimo-v2.5-tts")
+    MIMO_TTS_AUDIO_FORMAT: str = os.getenv("MIMO_TTS_AUDIO_FORMAT", "wav")
+    MIMO_TTS_TIMEOUT_SECONDS: float = float(os.getenv("MIMO_TTS_TIMEOUT_SECONDS", "60"))
+
     WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "base")
     WHISPER_CACHE_DIR: str = os.getenv("WHISPER_CACHE_DIR", "")
     WHISPER_LANGUAGE: str = os.getenv("WHISPER_LANGUAGE", "zh")

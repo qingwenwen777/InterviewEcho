@@ -261,6 +261,10 @@ ensure_backend_env_judge0() {
   set_backend_env ASR_TRANSCODE_AUDIO "true"
   set_backend_env ASR_MAX_AUDIO_BYTES "10485760"
   set_backend_env VOICE_UPLOAD_DIR "$remote_root/shared/voice"
+  set_backend_env MIMO_BASE_URL "https://token-plan-sgp.xiaomimimo.com/v1"
+  set_backend_env MIMO_TTS_MODEL "mimo-v2.5-tts"
+  set_backend_env MIMO_TTS_AUDIO_FORMAT "wav"
+  set_backend_env MIMO_TTS_TIMEOUT_SECONDS "60"
   set_backend_env INTERVIEW_MAX_FOLLOW_UPS_PER_QUESTION "1"
   set_backend_env INTERVIEW_SHORT_ROUNDS_MAX_FOLLOW_UPS "0"
 }

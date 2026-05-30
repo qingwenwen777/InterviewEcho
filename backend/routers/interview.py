@@ -1,4 +1,5 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, UploadFile, File
+from fastapi.responses import StreamingResponse
 import asyncio
 import uuid
 import shutil
@@ -6,8 +7,9 @@ import tempfile
 from services.stt_service import stt_service
 from services.audio_analysis import analyze_audio
 from services.repo_analyzer import analyze_repo
+from services.tts_service import TTSServiceError, get_tts_options, synthesize_interviewer_audio
 from core.config import settings
-from core.llm_service import generate_llm_response, evaluate_full_interview, polish_text, generate_repo_questions, generate_study_plan
+from core.llm_service import generate_llm_response, generate_llm_response_stream, evaluate_full_interview, polish_text, generate_repo_questions, generate_study_plan
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
 from typing import List
@@ -437,6 +439,146 @@ async def send_message(interview_id: int, msg: schemas.MessageSend, db: Session 
     return ai_msg_resp
 
 
+def _sse(payload: dict) -> str:
+    """Serialise a Server-Sent Events data frame."""
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@router.post("/{interview_id}/message/stream")
+async def send_message_stream(interview_id: int, msg: schemas.MessageSend, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
+    """Streaming counterpart of :func:`send_message`.
+
+    Streams the interviewer reply as Server-Sent Events so the frontend can
+    render the answer progressively instead of waiting for the full response.
+
+    Event frames (JSON in the SSE ``data:`` field):
+      - {"type": "user", "message": {...}}            # echoes the saved user message
+      - {"type": "delta", "text": "<fragment>"}        # incremental reply text
+      - {"type": "done", "message": {...}, "is_final": bool}
+      - {"type": "error", "detail": "..."}
+    """
+    ctx = _load_turn_context(interview_id, msg.content, db, user_id, None)
+    interview = ctx["interview"]
+    user_msg = ctx["user_msg"]
+    user_payload = schemas.MessageResponse.model_validate(user_msg).model_dump(mode="json")
+
+    # Round budget already exhausted: emit the closing message in one shot.
+    if ctx["question_count"] >= ctx["n"]:
+        response, _ = _store_closing_turn(db, interview, interview_id)
+        closing_payload = response.model_dump(mode="json")
+
+        async def closing_stream():
+            yield _sse({"type": "user", "message": user_payload})
+            yield _sse({"type": "delta", "text": response.content})
+            yield _sse({"type": "done", "message": closing_payload, "is_final": True})
+
+        return StreamingResponse(closing_stream(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
+
+    plan = _plan_interview_turn(ctx, db, user_id)
+
+    async def event_stream():
+        try:
+            yield _sse({"type": "user", "message": user_payload})
+
+            # Deterministic transitions (closing / forced skip) do not need token
+            # streaming, but we still emit the text as a single delta so the
+            # frontend rendering path stays identical.
+            if plan["is_final_move"]:
+                llm_resp = {"action": "MOVE_NEXT", "text": _closing_message()}
+                yield _sse({"type": "delta", "text": llm_resp["text"]})
+            elif plan["force_transition"]:
+                llm_resp = {"action": "MOVE_NEXT", "text": _move_next_message(plan["target_next_text"], skipped=plan["skipped_or_boundary"])}
+                yield _sse({"type": "delta", "text": llm_resp["text"]})
+            else:
+                action = "MOVE_NEXT"
+                full_text = ""
+                async for ev in generate_llm_response_stream(
+                    role=interview.role,
+                    question=plan["last_main_q"].content,
+                    expected_points=plan["expected_points"],
+                    conversation_history=plan["history_str"],
+                    target_next_question=plan["target_next_text"],
+                    difficulty=interview.difficulty,
+                    knowledge_points=plan["knowledge_points"],
+                    force_next_instruction=plan["force_next"],
+                ):
+                    if ev["type"] == "delta":
+                        yield _sse({"type": "delta", "text": ev["text"]})
+                    elif ev["type"] == "done":
+                        action = ev.get("action", "MOVE_NEXT")
+                        full_text = ev.get("text", "")
+                llm_resp = {"action": action, "text": full_text}
+
+                # Project-deepdive forcing may append a question that was not part
+                # of the streamed text; surface the appended remainder as a delta.
+                before_text = llm_resp["text"]
+                llm_resp = _postprocess_llm_resp(llm_resp, plan, ctx["ai_msgs"])
+                if llm_resp["text"] != before_text:
+                    if llm_resp["text"].startswith(before_text):
+                        remainder = llm_resp["text"][len(before_text):]
+                        if remainder:
+                            yield _sse({"type": "delta", "text": remainder})
+                    else:
+                        # Text was fully replaced (repeated follow-up guard).
+                        yield _sse({"type": "replace", "text": llm_resp["text"]})
+
+            response, _ai_msg, final_is_ended = _finalize_ai_turn(db, ctx, plan, llm_resp)
+            yield _sse({
+                "type": "done",
+                "message": response.model_dump(mode="json"),
+                "is_final": final_is_ended,
+            })
+        except Exception as e:
+            print(f"[send_message_stream] error: {type(e).__name__}: {e}")
+            db.rollback()
+            yield _sse({"type": "error", "detail": "生成回复时出现问题，请重试。"})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
+
+
+@router.get("/tts/options")
+def tts_options(user_id: int = Depends(get_current_user_id)):
+    return get_tts_options()
+
+
+@router.post("/{interview_id}/messages/{message_id}/tts", response_model=schemas.TTSResponse)
+async def synthesize_message_tts(
+    interview_id: int,
+    message_id: int,
+    data: schemas.TTSRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
+    interview = db.query(models.Interview).filter(
+        models.Interview.id == interview_id,
+        models.Interview.user_id == user_id,
+    ).first()
+    if not interview:
+        raise HTTPException(status_code=404, detail="Interview not found or unauthorized")
+
+    message = db.query(models.Message).filter(
+        models.Message.id == message_id,
+        models.Message.interview_id == interview_id,
+        models.Message.sender == "ai",
+    ).first()
+    if not message:
+        raise HTTPException(status_code=404, detail="AI message not found")
+
+    try:
+        return await synthesize_interviewer_audio(
+            message.content or "",
+            voice=data.voice or "mimo_default",
+            speed=data.speed or "normal",
+            style=data.style or "calm",
+        )
+    except TTSServiceError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 def _voice_upload_root() -> str:
     if settings.VOICE_UPLOAD_DIR:
         return settings.VOICE_UPLOAD_DIR
@@ -660,13 +802,15 @@ async def upload_voice(
             except:
                 pass
 
-async def process_message_logic(interview_id: int, content: str, db: Session, user_id: int, user_msg: models.Message | None = None):
-    # 1. Fetch interview context
+def _load_turn_context(interview_id: int, content: str, db: Session, user_id: int, user_msg: models.Message | None):
+    """Steps 1-3: fetch interview, persist the user message, and summarise history.
+
+    Shared by the blocking and streaming message handlers.
+    """
     interview = db.query(models.Interview).filter(models.Interview.id == interview_id, models.Interview.user_id == user_id).first()
     if not interview:
         raise HTTPException(status_code=404, detail="Interview not found or unauthorized")
 
-    # 2. Save User Message
     if user_msg is None:
         user_msg = models.Message(interview_id=interview_id, sender="user", content=content)
         db.add(user_msg)
@@ -675,14 +819,12 @@ async def process_message_logic(interview_id: int, content: str, db: Session, us
     else:
         content = user_msg.content or content
 
-    # 3. Analyze History
     messages = db.query(models.Message).filter(models.Message.interview_id == interview_id).order_by(models.Message.created_at.asc()).all()
     ai_msgs = [m for m in messages if m.sender == "ai"]
-    
+
     main_questions_asked = []
     current_follow_up_count = 0
-    
-    for m in ai_msgs[1:]: 
+    for m in ai_msgs[1:]:
         if m.category and "FOLLOW_UP" not in m.category:
             main_questions_asked.append(m)
             current_follow_up_count = 0
@@ -691,23 +833,51 @@ async def process_message_logic(interview_id: int, content: str, db: Session, us
 
     question_count = len(main_questions_asked)
     n = interview.total_rounds or 6
-    skipped_or_boundary = _is_skip_or_boundary_answer(content)
 
-    if question_count >= n:
-        interview.status = "completed"
-        interview.end_time = interview.end_time or datetime.utcnow()
-        ai_msg = models.Message(
-            interview_id=interview_id,
-            sender="ai",
-            content=_closing_message(),
-            category="closing",
-        )
-        db.add(ai_msg)
-        db.commit()
-        db.refresh(ai_msg)
-        response = schemas.MessageResponse.model_validate(ai_msg)
-        response.is_final = True
-        return response, user_msg.id
+    return {
+        "interview": interview,
+        "user_msg": user_msg,
+        "content": content,
+        "messages": messages,
+        "ai_msgs": ai_msgs,
+        "main_questions_asked": main_questions_asked,
+        "current_follow_up_count": current_follow_up_count,
+        "question_count": question_count,
+        "n": n,
+    }
+
+
+def _store_closing_turn(db: Session, interview: models.Interview, interview_id: int):
+    """Persist the closing message once the round budget is exhausted."""
+    interview.status = "completed"
+    interview.end_time = interview.end_time or datetime.utcnow()
+    ai_msg = models.Message(
+        interview_id=interview_id,
+        sender="ai",
+        content=_closing_message(),
+        category="closing",
+    )
+    db.add(ai_msg)
+    db.commit()
+    db.refresh(ai_msg)
+    response = schemas.MessageResponse.model_validate(ai_msg)
+    response.is_final = True
+    return response, ai_msg
+
+
+def _plan_interview_turn(ctx: dict, db: Session, user_id: int) -> dict:
+    """Steps 4-5: decide stage, target question, and forcing instructions.
+
+    Returns a plan dict consumed by both the blocking and streaming generators.
+    """
+    interview = ctx["interview"]
+    messages = ctx["messages"]
+    ai_msgs = ctx["ai_msgs"]
+    main_questions_asked = ctx["main_questions_asked"]
+    current_follow_up_count = ctx["current_follow_up_count"]
+    question_count = ctx["question_count"]
+    n = ctx["n"]
+    skipped_or_boundary = _is_skip_or_boundary_answer(ctx["content"])
 
     # 4. Determine Stage & Next Target
     # v4 新逻辑：4 段式覆盖赛题要求的全部题型
@@ -787,15 +957,15 @@ async def process_message_logic(interview_id: int, content: str, db: Session, us
 
         available_next = [q for q in potential_next if not _question_was_asked(q["question"], ai_msgs)]
         target_q_obj = random.choice(available_next if available_next else potential_next) if potential_next else {"question": "请继续。", "key_points": []}
-    
+
     # 5. Prepare LLM Context
     history_str = ""
-    for m in messages[-6:]: # Last 3 rounds
+    for m in messages[-6:]:  # Last 3 rounds
         role_name = "面试官" if m.sender == "ai" else "候选人"
         history_str += f"{role_name}: {m.content}\n"
 
     last_main_q = main_questions_asked[-1] if main_questions_asked else ai_msgs[0]
-    
+
     force_next = ""
     max_follow_ups = _max_follow_ups_for_interview(n)
     force_transition = skipped_or_boundary or current_follow_up_count >= max_follow_ups
@@ -814,67 +984,104 @@ async def process_message_logic(interview_id: int, content: str, db: Session, us
     else:
         target_next_text = target_q_obj["question"]
 
-    # 6. Generate AI Response
-    if is_final_move:
-        llm_resp = {"action": "MOVE_NEXT", "text": _closing_message()}
-    elif force_transition:
-        llm_resp = {"action": "MOVE_NEXT", "text": _move_next_message(target_next_text, skipped=skipped_or_boundary)}
-    else:
-        llm_resp = await generate_llm_response(
-            role=interview.role,
-            question=last_main_q.content,
-            expected_points="、".join(target_q_obj.get("key_points") or target_q_obj.get("expected_points") or ["技术准确性", "实践经验"]),
-            conversation_history=history_str,
-            target_next_question=target_next_text,
-            difficulty=interview.difficulty,
-            knowledge_points=_knowledge_points_for_prompt(db, interview, user_id),
-            force_next_instruction=force_next
-        )
-        if current_stage == "project" and has_custom:
-            llm_resp["action"] = "MOVE_NEXT"
-            llm_resp["text"] = _with_forced_question(
-                llm_resp.get("text", ""),
-                target_next_text,
-                target_q_obj.get("repo", ""),
-            )
-        repeated_follow_up = (
-            llm_resp.get("action") == "FOLLOW_UP"
-            and _is_repeated_ai_question(llm_resp.get("text", ""), ai_msgs)
-        )
-        if repeated_follow_up:
-            llm_resp["action"] = "MOVE_NEXT"
-            llm_resp["text"] = _move_next_message(target_next_text, skipped=False)
+    return {
+        "current_stage": current_stage,
+        "has_custom": has_custom,
+        "target_q_obj": target_q_obj,
+        "history_str": history_str,
+        "last_main_q": last_main_q,
+        "force_next": force_next,
+        "force_transition": force_transition,
+        "skipped_or_boundary": skipped_or_boundary,
+        "is_final_move": is_final_move,
+        "target_next_text": target_next_text,
+        "knowledge_points": _knowledge_points_for_prompt(db, interview, user_id),
+        "expected_points": "、".join(target_q_obj.get("key_points") or target_q_obj.get("expected_points") or ["技术准确性", "实践经验"]),
+    }
 
-    # 7. Update State
+
+def _postprocess_llm_resp(llm_resp: dict, plan: dict, ai_msgs: list) -> dict:
+    """Apply project-deepdive forcing and repeated-follow-up guards (step 6 tail)."""
+    if plan["current_stage"] == "project" and plan["has_custom"]:
+        llm_resp["action"] = "MOVE_NEXT"
+        llm_resp["text"] = _with_forced_question(
+            llm_resp.get("text", ""),
+            plan["target_next_text"],
+            plan["target_q_obj"].get("repo", ""),
+        )
+    repeated_follow_up = (
+        llm_resp.get("action") == "FOLLOW_UP"
+        and _is_repeated_ai_question(llm_resp.get("text", ""), ai_msgs)
+    )
+    if repeated_follow_up:
+        llm_resp["action"] = "MOVE_NEXT"
+        llm_resp["text"] = _move_next_message(plan["target_next_text"], skipped=False)
+    return llm_resp
+
+
+def _finalize_ai_turn(db: Session, ctx: dict, plan: dict, llm_resp: dict):
+    """Steps 7-8: persist the AI message and build the response model."""
+    interview = ctx["interview"]
+    question_count = ctx["question_count"]
+    n = ctx["n"]
+
     final_is_ended = False
-    # Only end if we have asked exactly N main questions AND the AI says MOVE_NEXT (meaning no more follow-ups for the last question)
+    # Only end if we have asked exactly N main questions AND the AI says MOVE_NEXT
+    # (meaning no more follow-ups for the last question)
     if question_count >= n and llm_resp["action"] == "MOVE_NEXT":
         final_is_ended = True
         interview.status = "completed"
         db.commit()
 
-    # Save AI Message
-    # Category tag: "Main" vs "FollowUp"
-    msg_category = current_stage
+    msg_category = plan["current_stage"]
     if llm_resp["action"] == "FOLLOW_UP":
-        msg_category = f"{current_stage}_FOLLOW_UP"
+        msg_category = f"{plan['current_stage']}_FOLLOW_UP"
 
     ai_msg = models.Message(
-        interview_id=interview_id,
+        interview_id=interview.id,
         sender="ai",
         content=llm_resp["text"],
-        category=msg_category
+        category=msg_category,
     )
     db.add(ai_msg)
     db.commit()
     db.refresh(ai_msg)
 
-    # 8. Format Response for Schema
-    # MessageResponse expects id, sender, content, created_at, and is_final.
     response = schemas.MessageResponse.model_validate(ai_msg)
     response.is_final = final_is_ended
-    
-    # 返回值为 Tuple，包含新生成的 user_msg 的主键 ID
+    return response, ai_msg, final_is_ended
+
+
+async def process_message_logic(interview_id: int, content: str, db: Session, user_id: int, user_msg: models.Message | None = None):
+    ctx = _load_turn_context(interview_id, content, db, user_id, user_msg)
+    interview = ctx["interview"]
+    user_msg = ctx["user_msg"]
+
+    if ctx["question_count"] >= ctx["n"]:
+        response, _ = _store_closing_turn(db, interview, interview_id)
+        return response, user_msg.id
+
+    plan = _plan_interview_turn(ctx, db, user_id)
+
+    # 6. Generate AI Response
+    if plan["is_final_move"]:
+        llm_resp = {"action": "MOVE_NEXT", "text": _closing_message()}
+    elif plan["force_transition"]:
+        llm_resp = {"action": "MOVE_NEXT", "text": _move_next_message(plan["target_next_text"], skipped=plan["skipped_or_boundary"])}
+    else:
+        llm_resp = await generate_llm_response(
+            role=interview.role,
+            question=plan["last_main_q"].content,
+            expected_points=plan["expected_points"],
+            conversation_history=plan["history_str"],
+            target_next_question=plan["target_next_text"],
+            difficulty=interview.difficulty,
+            knowledge_points=plan["knowledge_points"],
+            force_next_instruction=plan["force_next"],
+        )
+        llm_resp = _postprocess_llm_resp(llm_resp, plan, ctx["ai_msgs"])
+
+    response, _ai_msg, _final = _finalize_ai_turn(db, ctx, plan, llm_resp)
     return response, user_msg.id
 
 async def _build_and_store_evaluation(interview_id: int, db: Session) -> dict | None:

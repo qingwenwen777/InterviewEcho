@@ -61,6 +61,8 @@ import {
   TimerReset,
   Trophy,
   UserRound,
+  Volume2,
+  VolumeX,
   X,
 } from 'lucide-react'
 import api from './api'
@@ -182,6 +184,44 @@ const wait = (ms) =>
 const VOICE_REPLY_POLL_INTERVAL_MS = 1000
 const VOICE_REPLY_MAX_POLL_ATTEMPTS = 90
 const VOICE_REPLY_MAX_POLL_FAILURES = 5
+const TTS_SETTINGS_STORAGE_KEY = 'interviewecho-tts-settings'
+const INTERVIEW_TTS_VOICES = [
+  { id: 'mimo_default', label: '默认' },
+  { id: '冰糖', label: '冰糖' },
+  { id: '茉莉', label: '茉莉' },
+  { id: '苏打', label: '苏打' },
+  { id: '白桦', label: '白桦' },
+  { id: 'Mia', label: 'Mia' },
+  { id: 'Chloe', label: 'Chloe' },
+  { id: 'Milo', label: 'Milo' },
+  { id: 'Dean', label: 'Dean' },
+]
+const INTERVIEW_TTS_SPEEDS = [
+  { id: 'slow', label: '慢速' },
+  { id: 'normal', label: '标准' },
+  { id: 'fast', label: '稍快' },
+]
+const INTERVIEW_TTS_STYLES = [
+  { id: 'calm', label: '克制' },
+  { id: 'warm', label: '温和' },
+  { id: 'strict', label: '严谨' },
+]
+const DEFAULT_TTS_SETTINGS = {
+  autoPlay: true,
+  voice: 'mimo_default',
+  speed: 'normal',
+  style: 'calm',
+}
+function readStoredTtsSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(TTS_SETTINGS_STORAGE_KEY) || 'null')
+    if (!saved || typeof saved !== 'object') return DEFAULT_TTS_SETTINGS
+    return { ...DEFAULT_TTS_SETTINGS, ...saved }
+  } catch {
+    return DEFAULT_TTS_SETTINGS
+  }
+}
+
 const isCodeFinalStatus = (status) => Boolean(status) && !CODE_PENDING_STATUSES.has(status)
 const toCodeSubmissionResult = (detail) => ({
   submission_id: detail.id,
@@ -1532,11 +1572,16 @@ function InterviewRoom() {
   const [isRecording, setIsRecording] = useState(false)
   const [isTranscribing, setIsTranscribing] = useState(false)
   const [focusMode, setFocusMode] = useState(false)
+  const [ttsSettings, setTtsSettings] = useState(readStoredTtsSettings)
+  const [ttsLoadingId, setTtsLoadingId] = useState(null)
+  const [speakingMessageId, setSpeakingMessageId] = useState(null)
   const chatRef = useRef(null)
   const composerInputRef = useRef(null)
   const recorderRef = useRef(null)
   const streamRef = useRef(null)
   const chunksRef = useRef([])
+  const audioRef = useRef(null)
+  const spokenMessageKeysRef = useRef(new Set())
 
   const scrollToBottom = useCallback(() => {
     window.requestAnimationFrame(() => {
@@ -1610,6 +1655,192 @@ function InterviewRoom() {
     textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden'
   }, [input])
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(TTS_SETTINGS_STORAGE_KEY, JSON.stringify(ttsSettings))
+    } catch {
+      // Local storage may be unavailable in strict privacy modes.
+    }
+  }, [ttsSettings])
+
+  useEffect(
+    () => () => {
+      audioRef.current?.pause?.()
+      audioRef.current = null
+    },
+    [],
+  )
+
+  const updateTtsSetting = (key, value) => {
+    setTtsSettings((current) => ({ ...current, [key]: value }))
+  }
+
+  const stopInterviewerAudio = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current.currentTime = 0
+      audioRef.current = null
+    }
+    setSpeakingMessageId(null)
+  }, [])
+
+  const playInterviewerMessage = useCallback(
+    async (message, manual = false) => {
+      if (!interviewId || !message?.id || message.sender === 'user' || message.status === 'typing') return
+      if (!ttsSettings.autoPlay && !manual) return
+      if (speakingMessageId === message.id && audioRef.current) {
+        stopInterviewerAudio()
+        return
+      }
+
+      stopInterviewerAudio()
+      setTtsLoadingId(message.id)
+      try {
+        const { data } = await api.post(`/interview/${interviewId}/messages/${message.id}/tts`, {
+          voice: ttsSettings.voice,
+          speed: ttsSettings.speed,
+          style: ttsSettings.style,
+        })
+        const nextAudio = new Audio(`data:${data.mime_type || 'audio/wav'};base64,${data.audio_base64}`)
+        audioRef.current = nextAudio
+        nextAudio.onended = () => {
+          if (audioRef.current === nextAudio) audioRef.current = null
+          setSpeakingMessageId(null)
+        }
+        nextAudio.onerror = () => {
+          if (audioRef.current === nextAudio) audioRef.current = null
+          setSpeakingMessageId(null)
+          if (manual) toast('面试官语音播放失败，请稍后重试。', 'warning')
+        }
+        setSpeakingMessageId(message.id)
+        await nextAudio.play()
+      } catch (error) {
+        audioRef.current?.pause?.()
+        audioRef.current = null
+        setSpeakingMessageId(null)
+        if (manual) toast(`面试官语音生成失败：${getErrorMessage(error)}`, 'error')
+      } finally {
+        setTtsLoadingId(null)
+      }
+    },
+    [interviewId, speakingMessageId, stopInterviewerAudio, toast, ttsSettings],
+  )
+
+  const latestAiMessage = useMemo(
+    () => [...messages].reverse().find((message) => message.sender === 'ai' && message.id && message.status !== 'typing'),
+    [messages],
+  )
+  const latestAiSpeechKey = latestAiMessage
+    ? `${latestAiMessage.id}:${ttsSettings.voice}:${ttsSettings.speed}:${ttsSettings.style}`
+    : ''
+
+  useEffect(() => {
+    if (!ttsSettings.autoPlay || !latestAiMessage || !latestAiSpeechKey) return
+    if (spokenMessageKeysRef.current.has(latestAiSpeechKey)) return
+    spokenMessageKeysRef.current.add(latestAiSpeechKey)
+    playInterviewerMessage(latestAiMessage, false)
+  }, [latestAiMessage, latestAiSpeechKey, playInterviewerMessage, ttsSettings.autoPlay])
+
+  const updateStreamingMessage = useCallback((streamKey, nextContent) => {
+    setMessages((current) =>
+      current.map((message) =>
+        message._streamKey === streamKey ? { ...message, content: nextContent } : message,
+      ),
+    )
+  }, [])
+
+  const replaceStreamingMessage = useCallback((streamKey, finalMessage) => {
+    setMessages((current) =>
+      current.map((message) => (message._streamKey === streamKey ? finalMessage : message)),
+    )
+  }, [])
+
+  const dropStreamingMessage = useCallback((streamKey) => {
+    setMessages((current) => current.filter((message) => message._streamKey !== streamKey))
+  }, [])
+
+  // Consume the interviewer reply as Server-Sent Events so the answer renders
+  // progressively. Returns the final message (with real id) on success.
+  // Throws an error with `.fallback = true` when the streaming endpoint is
+  // unavailable (e.g. an older backend), so the caller can degrade gracefully.
+  const streamAiReply = useCallback(
+    async (content, streamKey) => {
+      const base = api.defaults.baseURL || '/api'
+      const token = localStorage.getItem('token')
+      const response = await fetch(`${base}/interview/${interviewId}/message/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ content }),
+      })
+
+      if (!response.ok || !response.body) {
+        const error = new Error('streaming endpoint unavailable')
+        error.fallback = true
+        throw error
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let accumulated = ''
+      let finalMessage = null
+      let isFinal = false
+      let streamError = null
+
+      const handleFrame = (frame) => {
+        const dataLine = frame
+          .split('\n')
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trim())
+          .join('')
+        if (!dataLine) return
+        let event
+        try {
+          event = JSON.parse(dataLine)
+        } catch {
+          return
+        }
+        if (event.type === 'delta') {
+          accumulated += event.text || ''
+          updateStreamingMessage(streamKey, accumulated)
+        } else if (event.type === 'replace') {
+          accumulated = event.text || ''
+          updateStreamingMessage(streamKey, accumulated)
+        } else if (event.type === 'done') {
+          finalMessage = event.message || null
+          isFinal = Boolean(event.is_final)
+        } else if (event.type === 'error') {
+          streamError = new Error(event.detail || '生成回复失败')
+        }
+      }
+
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        let separatorIndex
+        while ((separatorIndex = buffer.indexOf('\n\n')) !== -1) {
+          const frame = buffer.slice(0, separatorIndex)
+          buffer = buffer.slice(separatorIndex + 2)
+          handleFrame(frame)
+          if (streamError) break
+        }
+        if (streamError) break
+      }
+      if (buffer.trim() && !streamError) handleFrame(buffer)
+
+      if (streamError) throw streamError
+      if (!finalMessage) throw new Error('未收到完整的面试官回复')
+
+      replaceStreamingMessage(streamKey, finalMessage)
+      return { finalMessage, isFinal: isFinal || Boolean(finalMessage.is_final) }
+    },
+    [interviewId, replaceStreamingMessage, updateStreamingMessage],
+  )
+
   const sendMessage = async () => {
     if (isRecording) {
       stopRecording()
@@ -1620,15 +1851,44 @@ function InterviewRoom() {
     setMessages((current) => [...current, { sender: 'user', content, created_at: new Date().toISOString() }])
     setInput('')
     setSending(true)
+
+    const streamKey = `stream-${Date.now()}`
+    setMessages((current) => [
+      ...current,
+      { sender: 'ai', content: '', status: 'streaming', _streamKey: streamKey, created_at: new Date().toISOString() },
+    ])
+
     try {
-      const { data } = await api.post(`/interview/${interviewId}/message`, { content })
-      setMessages((current) => [...current, data])
-      if (data.is_final) {
+      const { isFinal } = await streamAiReply(content, streamKey)
+      if (isFinal) {
         toast('已达到建议轮次，准备生成报告。', 'warning')
         window.setTimeout(endInterview, 1200)
       }
     } catch (error) {
-      toast(`消息发送失败：${getErrorMessage(error)}`, 'error')
+      dropStreamingMessage(streamKey)
+      if (error?.fallback) {
+        // Backend without the streaming endpoint: fall back to the blocking API.
+        try {
+          const { data } = await api.post(`/interview/${interviewId}/message`, { content })
+          setMessages((current) => [...current, data])
+          if (data.is_final) {
+            toast('已达到建议轮次，准备生成报告。', 'warning')
+            window.setTimeout(endInterview, 1200)
+          }
+        } catch (fallbackError) {
+          toast(`消息发送失败：${getErrorMessage(fallbackError)}`, 'error')
+        }
+      } else {
+        // Stream broke after the answer was persisted server-side: re-sync so we
+        // pick up whatever reply the backend managed to save.
+        try {
+          const { data } = await api.get(`/interview/${interviewId}/messages`)
+          if (Array.isArray(data)) setMessages(data)
+        } catch {
+          // Ignore re-sync failures; the toast below already surfaces the issue.
+        }
+        toast(`回复生成中断：${getErrorMessage(error)}`, 'error')
+      }
     } finally {
       setSending(false)
     }
@@ -1745,6 +2005,47 @@ function InterviewRoom() {
         </div>
       </header>
 
+      <div className="voice-settings-bar" aria-label="面试官声音设置">
+        <button
+          className={`voice-auto-toggle ${ttsSettings.autoPlay ? 'active' : ''}`}
+          onClick={() => updateTtsSetting('autoPlay', !ttsSettings.autoPlay)}
+          title={ttsSettings.autoPlay ? '关闭自动朗读' : '开启自动朗读'}
+        >
+          {ttsSettings.autoPlay ? <Volume2 size={15} /> : <VolumeX size={15} />}
+          <span>自动朗读</span>
+        </button>
+        <div className="voice-select-field">
+          <span>音色</span>
+          <FilterSelect
+            ariaLabel="选择面试官音色"
+            value={ttsSettings.voice}
+            options={INTERVIEW_TTS_VOICES.map((voice) => ({ value: voice.id, label: voice.label }))}
+            onChange={(value) => updateTtsSetting('voice', value)}
+          />
+        </div>
+        <div className="voice-speed-group" aria-label="语速">
+          {INTERVIEW_TTS_SPEEDS.map((speed) => (
+            <button
+              key={speed.id}
+              className={ttsSettings.speed === speed.id ? 'active' : ''}
+              onClick={() => updateTtsSetting('speed', speed.id)}
+              type="button"
+            >
+              {speed.label}
+            </button>
+          ))}
+        </div>
+        <div className="voice-select-field">
+          <span>语气</span>
+          <FilterSelect
+            ariaLabel="选择面试官语气"
+            value={ttsSettings.style}
+            options={INTERVIEW_TTS_STYLES.map((style) => ({ value: style.id, label: style.label }))}
+            onChange={(value) => updateTtsSetting('style', value)}
+          />
+        </div>
+      </div>
+
       <main className="chat-shell">
         <div className="chat-feed" ref={chatRef}>
           {!messages.length && (
@@ -1754,9 +2055,17 @@ function InterviewRoom() {
             </div>
           )}
           {messages.map((message, index) => (
-            <ChatBubble key={message.id || `${message.sender}-${index}`} message={message} />
+            <ChatBubble
+              key={message.id || message._streamKey || `${message.sender}-${index}`}
+              message={message}
+              onSpeak={playInterviewerMessage}
+              speakingMessageId={speakingMessageId}
+              ttsLoadingId={ttsLoadingId}
+            />
           ))}
-          {sending && <ChatBubble message={{ sender: 'ai', content: '正在分析你的回答并组织下一轮追问...', status: 'typing' }} />}
+          {sending && !messages.some((message) => message.status === 'streaming') && (
+            <ChatBubble message={{ sender: 'ai', content: '正在分析你的回答并组织下一轮追问...', status: 'typing' }} />
+          )}
         </div>
 
         <div
@@ -2993,13 +3302,40 @@ function ExpressionLineChart({ data = [] }) {
   return <EChart option={option} className="chart expression-chart" />
 }
 
-function ChatBubble({ message }) {
+function ChatBubble({ message, onSpeak, speakingMessageId, ttsLoadingId }) {
   const isUser = message.sender === 'user'
+  const isStreaming = message.status === 'streaming'
+  const isTyping = message.status === 'typing'
+  const canSpeak = !isUser && message.id && !isStreaming && !isTyping && onSpeak
+  const isLoadingVoice = canSpeak && ttsLoadingId === message.id
+  const isSpeaking = canSpeak && speakingMessageId === message.id
+  // While streaming, show typing dots only until the first characters arrive.
+  const showTypingDots = isTyping || (isStreaming && !message.content)
   return (
     <div className={`chat-row ${isUser ? 'user' : 'ai'}`}>
-      <div className="speaker">{isUser ? '候选人' : '智能面试官'}</div>
-      <div className={`bubble ${message.status === 'typing' ? 'typing' : ''}`}>
-        {message.status === 'typing' ? <TypingDots /> : <FormattedMessage content={message.content} />}
+      <div className="speaker-line">
+        <div className="speaker">{isUser ? '候选人' : '智能面试官'}</div>
+        {canSpeak && (
+          <button
+            className={`bubble-voice-button ${isSpeaking ? 'speaking' : ''}`}
+            onClick={() => onSpeak(message, true)}
+            disabled={isLoadingVoice}
+            title={isSpeaking ? '停止播放' : '播放面试官声音'}
+            type="button"
+          >
+            {isLoadingVoice ? <LoaderCircle className="spin" size={13} /> : <Volume2 size={13} />}
+          </button>
+        )}
+      </div>
+      <div className={`bubble ${showTypingDots ? 'typing' : ''} ${isStreaming && message.content ? 'streaming' : ''}`}>
+        {showTypingDots ? (
+          <TypingDots />
+        ) : (
+          <>
+            <FormattedMessage content={message.content} />
+            {isStreaming && <span className="stream-caret" aria-hidden="true" />}
+          </>
+        )}
       </div>
     </div>
   )
