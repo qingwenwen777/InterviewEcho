@@ -88,6 +88,11 @@ class Message(Base):
     sender = Column(String(20), nullable=False)
     content = Column(Text, nullable=False)
     category = Column(String(50), nullable=True) # For evaluation alignment
+    round_index = Column(Integer, nullable=True)
+    question_id = Column(String(160), nullable=True)
+    parent_question_id = Column(Integer, nullable=True)
+    action = Column(String(30), nullable=True)
+    source = Column(String(50), nullable=True)
     audio_path = Column(String(255), nullable=True)
     created_at = Column(TIMESTAMP, default=datetime.utcnow)
 

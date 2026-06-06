@@ -44,9 +44,17 @@ CREATE TABLE IF NOT EXISTS messages (
     sender VARCHAR(20) NOT NULL,
     content TEXT NOT NULL,
     category VARCHAR(50) NULL,
+    round_index INT NULL,
+    question_id VARCHAR(160) NULL,
+    parent_question_id INT NULL,
+    action VARCHAR(30) NULL,
+    source VARCHAR(50) NULL,
     audio_path VARCHAR(255) NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (interview_id) REFERENCES interviews(id) ON DELETE CASCADE
+    FOREIGN KEY (interview_id) REFERENCES interviews(id) ON DELETE CASCADE,
+    INDEX idx_messages_round (interview_id, round_index),
+    INDEX idx_messages_question (interview_id, question_id),
+    INDEX idx_messages_parent (interview_id, parent_question_id)
 );
 
 -- Evaluations table

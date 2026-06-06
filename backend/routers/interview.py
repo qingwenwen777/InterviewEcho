@@ -17,6 +17,7 @@ import json
 import os
 import random
 import re
+import hashlib
 from db import models, schemas
 from db.database import SessionLocal, get_db
 from datetime import datetime
@@ -111,6 +112,23 @@ def _knowledge_points_for_prompt(db: Session, interview: models.Interview, user_
 
 
 _QUESTION_NOISE_RE = re.compile(r"[\s\W_]+", re.UNICODE)
+MAIN_QUESTION_CATEGORIES = {"business_scenario", "project", "problem_solving", "behavioral"}
+QUESTION_MESSAGE_SOURCES = {"question_bank", "github_repo", "fallback"}
+
+
+def _is_main_question_message(message: models.Message) -> bool:
+    action = getattr(message, "action", None)
+    source = getattr(message, "source", None)
+    if action:
+        return action == "MOVE_NEXT" and source in QUESTION_MESSAGE_SOURCES
+    return (message.category or "") in MAIN_QUESTION_CATEGORIES
+
+
+def _is_follow_up_message(message: models.Message) -> bool:
+    action = getattr(message, "action", None)
+    if action:
+        return action == "FOLLOW_UP"
+    return (message.category or "").endswith("_FOLLOW_UP")
 
 
 def _normalize_question_text(value: str) -> str:
@@ -141,7 +159,9 @@ def _question_similarity(left: str, right: str) -> float:
     return len(left_set & right_set) / max(1, len(left_set | right_set))
 
 
-def _question_was_asked(question: str, ai_messages: list) -> bool:
+def _question_was_asked(question: str, ai_messages: list, question_id: str = "") -> bool:
+    if question_id and any(getattr(m, "question_id", None) == question_id for m in ai_messages):
+        return True
     if not question:
         return False
     return any(
@@ -162,8 +182,14 @@ def _with_forced_question(text: str, question: str, repo_name: str = "") -> str:
         return text
     if text and text[-1] not in "。！？!?":
         text += "。"
+    if question.startswith("在你的项目"):
+        return f"{text} {question}" if text else question
     prefix = f"接下来我想针对你的 GitHub 项目 {repo_name} 深挖一个具体问题：" if repo_name else "接下来我想针对你的 GitHub 项目深挖一个具体问题："
     return f"{text} {prefix}{question}" if text else f"{prefix}{question}"
+
+
+def _first_question_message(question: str) -> str:
+    return f"好的，感谢你的自我介绍。我们进入第一题：{question}"
 
 
 def _is_skip_or_boundary_answer(content: str) -> bool:
@@ -204,7 +230,7 @@ def _max_follow_ups_for_interview(total_rounds: int) -> int:
 
 
 def _closing_message() -> str:
-    return "好的，本轮面试到这里结束。感谢你的回答，接下来我会为你生成评估报告。"
+    return "【面试结束】好的，所有设定题目已经完成，本轮模拟面试到这里结束。感谢你的回答，接下来我会为你生成评估报告。"
 
 
 def _move_next_message(question: str, skipped: bool = False) -> str:
@@ -239,21 +265,202 @@ ROLES = [
     }
 ]
 
-def get_questions_by_category(role_key: str, category: str, difficulty: str = "medium", knowledge_points: List[str] = None):
-    # Map role key to actual JSON file
+def _questions_file_for_role(role_key: str) -> str:
     backend_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    questions_file = os.path.join(os.path.dirname(backend_path), "knowledge-base", role_key, "questions.json")
-    
+    return os.path.join(os.path.dirname(backend_path), "knowledge-base", role_key, "questions.json")
+
+
+def _load_role_questions(role_key: str) -> list[dict]:
+    questions_file = _questions_file_for_role(role_key)
     if not os.path.exists(questions_file):
         return []
+    try:
+        with open(questions_file, "r", encoding="utf-8") as f:
+            questions = json.load(f)
+            return questions if isinstance(questions, list) else []
+    except Exception:
+        return []
+
+
+def _custom_questions_for_interview(interview: models.Interview) -> list[dict]:
+    if not interview.custom_questions:
+        return []
+    try:
+        questions = json.loads(interview.custom_questions)
+        return questions if isinstance(questions, list) else []
+    except Exception:
+        return []
+
+
+def _repo_key_for_question(question_obj: dict) -> str:
+    if not isinstance(question_obj, dict):
+        return "__github_repo__"
+    return (
+        str(question_obj.get("repo") or "").strip()
+        or str(question_obj.get("section") or "").strip()
+        or "__github_repo__"
+    )
+
+
+def _repo_keys_for_custom_questions(custom_questions: list[dict]) -> list[str]:
+    keys = []
+    for question in custom_questions:
+        key = _repo_key_for_question(question)
+        if key not in keys:
+            keys.append(key)
+    return keys
+
+
+def _repo_round_count_for_custom_questions(custom_questions: list[dict]) -> int:
+    return len(_repo_keys_for_custom_questions(custom_questions))
+
+
+def _effective_total_rounds(interview: models.Interview) -> int:
+    base_rounds = interview.total_rounds or 6
+    return base_rounds + _repo_round_count_for_custom_questions(_custom_questions_for_interview(interview))
+
+
+def _question_source(question_obj: dict, stage: str) -> str:
+    if isinstance(question_obj, dict) and question_obj.get("source"):
+        return str(question_obj["source"])
+    if isinstance(question_obj, dict) and question_obj.get("repo"):
+        return "github_repo"
+    if stage == "project" and isinstance(question_obj, dict) and "项目经历·" in str(question_obj.get("section", "")):
+        return "github_repo"
+    return "question_bank"
+
+
+def _stable_question_id(question_obj: dict, stage: str) -> str:
+    if isinstance(question_obj, dict):
+        for key in ("question_id", "id"):
+            value = question_obj.get(key)
+            if value:
+                return str(value)
+    source = _question_source(question_obj, stage)
+    repo_key = _repo_key_for_question(question_obj)
+    question_text = (question_obj.get("question") or "") if isinstance(question_obj, dict) else ""
+    raw = f"{source}|{stage}|{repo_key}|{question_text}"
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+    return f"{source}:{stage}:{digest}"
+
+
+def _with_question_identity(question_obj: dict, stage: str) -> dict:
+    question_copy = dict(question_obj or {})
+    question_copy["source"] = _question_source(question_copy, stage)
+    question_copy["question_id"] = _stable_question_id(question_copy, stage)
+    return question_copy
+
+
+def _question_points(question_obj: dict) -> list[str]:
+    if not isinstance(question_obj, dict):
+        return []
+    points = question_obj.get("key_points") or question_obj.get("expected_points") or []
+    return points if isinstance(points, list) else []
+
+
+def _expected_points_for_main_question(role_key: str, interview: models.Interview, main_question: models.Message | None) -> str:
+    if not main_question:
+        return "技术准确性、实践经验"
+
+    text = main_question.content or ""
+    candidates = _custom_questions_for_interview(interview) + _load_role_questions(role_key)
+    best_question = None
+    best_score = 0.0
+    for candidate in candidates:
+        candidate = _with_question_identity(candidate, candidate.get("category", "project") if isinstance(candidate, dict) else "project")
+        if getattr(main_question, "question_id", None) and candidate.get("question_id") == main_question.question_id:
+            best_question = candidate
+            best_score = 1.0
+            break
+        question_text = candidate.get("question", "") if isinstance(candidate, dict) else ""
+        if not question_text:
+            continue
+        score = 1.0 if question_text in text else _question_similarity(question_text, text)
+        if score > best_score:
+            best_question = candidate
+            best_score = score
+
+    if best_question and best_score >= 0.62:
+        points = _question_points(best_question)
+        if points:
+            return "、".join(str(point) for point in points)
+    return "技术准确性、实践经验"
+
+
+def _repo_display_name(question_obj: dict) -> str:
+    repo = (question_obj.get("repo") or "").strip() if isinstance(question_obj, dict) else ""
+    if repo:
+        return repo.split("/")[-1] or repo
+    section = (question_obj.get("section") or "").strip() if isinstance(question_obj, dict) else ""
+    if "·" in section:
+        return section.rsplit("·", 1)[-1].strip()
+    return repo
+
+
+def _with_repo_project_context(question_obj: dict) -> dict:
+    question_copy = dict(question_obj or {})
+    question_text = (question_copy.get("question") or "").strip()
+    repo_name = _repo_display_name(question_copy)
+    if question_text and repo_name and "你的项目" not in question_text and repo_name not in question_text:
+        question_copy["question"] = f"在你的项目“{repo_name}”中，{question_text}"
+    return question_copy
+
+
+def _fallback_question_for_stage(stage: str, ai_msgs: list) -> dict:
+    fallbacks = {
+        "business_scenario": [
+            "请结合一个真实业务场景，说明你会如何拆解问题、评估风险并推进落地？",
+            "如果线上出现一个影响用户体验的问题，你会如何定位优先级并组织排查？",
+        ],
+        "project": [
+            "请选一个你最熟悉的项目模块，讲讲它的核心设计、权衡以及你后续会如何优化？",
+            "围绕你做过的一个项目，说明一次具体的技术取舍以及最终效果。",
+        ],
+        "problem_solving": [
+            "请选一个你熟悉的核心技术点，讲清楚它的底层原理、适用场景和常见坑。",
+            "如果一个系统性能突然下降，你会从哪些指标和链路开始排查？",
+        ],
+        "behavioral": [
+            "请讲一次你和他人在技术方案上意见不一致的经历，你是如何沟通和推进的？",
+            "请讲一次你面对不熟悉问题时的处理过程，包括你如何学习、验证和复盘。",
+        ],
+    }
+    for question in fallbacks.get(stage, fallbacks["behavioral"]):
+        if not _question_was_asked(question, ai_msgs):
+            return _with_question_identity({"question": question, "key_points": ["结构化表达", "具体经历", "复盘能力"], "source": "fallback"}, stage)
+    return _with_question_identity({"question": "我们换一个角度，请结合一个具体经历说明你的判断、行动和复盘。", "key_points": ["结构化表达", "具体经历", "复盘能力"], "source": "fallback"}, stage)
+
+
+def _select_unasked_question(role_key: str, stage: str, difficulty: str, knowledge_points: list[str], ai_msgs: list) -> dict:
+    search_scopes = [
+        (difficulty, knowledge_points),
+        (difficulty, None),
+        ("中等", None),
+        ("简单", None),
+        ("困难", None),
+    ]
+    seen_scopes = set()
+    for diff, points in search_scopes:
+        scope_key = (diff, tuple(points or []))
+        if scope_key in seen_scopes:
+            continue
+        seen_scopes.add(scope_key)
+        potential = get_questions_by_category(role_key, stage, diff, points)
+        potential = [_with_question_identity(q, stage) for q in potential]
+        available = [q for q in potential if not _question_was_asked(q.get("question", ""), ai_msgs, q.get("question_id", ""))]
+        if available:
+            return random.choice(available)
+    return _fallback_question_for_stage(stage, ai_msgs)
+
+
+def get_questions_by_category(role_key: str, category: str, difficulty: str = "medium", knowledge_points: List[str] = None):
+    # Map role key to actual JSON file
 
     diff_map = {"简单": "easy", "中等": "medium", "困难": "hard"}
     target_diff = diff_map.get(difficulty, "medium")
 
     try:
-        with open(questions_file, "r", encoding="utf-8") as f:
-            all_questions = json.load(f)
-            
+        all_questions = _load_role_questions(role_key)
         potential = []
         for q in all_questions:
             if q.get("category") == category and q.get("difficulty") == target_diff:
@@ -323,6 +530,7 @@ async def start_interview(data: schemas.InterviewStart, db: Session = Depends(ge
     # v3: 如果用户提供了 GitHub 项目链接，优先复用前端预分析摘要，再生成定制问题
     repo_context_json = None
     custom_questions_json = None
+    repo_deepdive_rounds = 0
     repo_urls = (data.repo_urls or [])[:3]   # 最多 3 个
     if repo_urls:
         preview_summaries = data.repo_summaries or []
@@ -349,6 +557,7 @@ async def start_interview(data: schemas.InterviewStart, db: Session = Depends(ge
             repo_context_json = json.dumps(repo_summaries, ensure_ascii=False)
         if all_custom_questions:
             custom_questions_json = json.dumps(all_custom_questions, ensure_ascii=False)
+            repo_deepdive_rounds = _repo_round_count_for_custom_questions(all_custom_questions)
             print(f"[start_interview] generated {len(all_custom_questions)} custom questions total")
 
     new_interview = models.Interview(
@@ -367,8 +576,18 @@ async def start_interview(data: schemas.InterviewStart, db: Session = Depends(ge
 
     # Round 0: Only Introduction request (First sentence, no questions yet)
     profile_note = "我也会结合你在用户中心保存的简历资料来观察匹配度。" if _candidate_context_for_prompt(db, user_id) else ""
-    greeting = f"你好，我是你的{data.role}面试官。很高兴见到你。本次面试共设定为 {data.total_rounds} 轮提问。{profile_note}在正式开始前，请先做一个简单的自我介绍。"
-    ai_msg = models.Message(interview_id=new_interview.id, sender="ai", content=greeting, category="introduction")
+    repo_round_note = f"你选择了 GitHub 项目深挖，我会额外增加 {repo_deepdive_rounds} 轮，每个项目 1 题。" if repo_deepdive_rounds else ""
+    greeting = f"你好，我是你的{data.role}面试官。很高兴见到你。本次常规面试共设定为 {data.total_rounds} 轮提问。{repo_round_note}{profile_note}在正式开始前，请先做一个简单的自我介绍。"
+    ai_msg = models.Message(
+        interview_id=new_interview.id,
+        sender="ai",
+        content=greeting,
+        category="introduction",
+        round_index=0,
+        question_id="introduction",
+        action="INTRO",
+        source="system",
+    )
     db.add(ai_msg)
     db.commit()
 
@@ -485,6 +704,9 @@ async def send_message_stream(interview_id: int, msg: schemas.MessageSend, db: S
             # frontend rendering path stays identical.
             if plan["is_final_move"]:
                 llm_resp = {"action": "MOVE_NEXT", "text": _closing_message()}
+                yield _sse({"type": "delta", "text": llm_resp["text"]})
+            elif plan["is_intro_move"]:
+                llm_resp = {"action": "MOVE_NEXT", "text": _first_question_message(plan["target_next_text"])}
                 yield _sse({"type": "delta", "text": llm_resp["text"]})
             elif plan["force_transition"]:
                 llm_resp = {"action": "MOVE_NEXT", "text": _move_next_message(plan["target_next_text"], skipped=plan["skipped_or_boundary"])}
@@ -645,11 +867,18 @@ def _store_voice_reply_fallback(db: Session, interview_id: int, user_id: int, us
         "刚才生成追问时出现了短暂异常，我们先继续保持面试节奏。"
         f"下一题：请结合{role_text}的实际工作场景，说明一次你定位并解决技术问题的过程。"
     )
+    previous_ai = db.query(models.Message).filter(models.Message.interview_id == interview_id, models.Message.sender == "ai").order_by(models.Message.created_at.asc()).all()
+    previous_rounds = [message for message in previous_ai if _is_main_question_message(message)]
+    fallback_question = _with_question_identity({"question": fallback_text, "source": "fallback"}, "problem_solving")
     ai_msg = models.Message(
         interview_id=interview_id,
         sender="ai",
         content=fallback_text,
         category="voice_fallback",
+        round_index=len(previous_rounds) + 1,
+        question_id=fallback_question["question_id"],
+        action="MOVE_NEXT",
+        source="fallback",
     )
     db.add(ai_msg)
     db.commit()
@@ -811,13 +1040,35 @@ def _load_turn_context(interview_id: int, content: str, db: Session, user_id: in
     if not interview:
         raise HTTPException(status_code=404, detail="Interview not found or unauthorized")
 
+    messages_before_user = db.query(models.Message).filter(models.Message.interview_id == interview_id).order_by(models.Message.created_at.asc()).all()
+    ai_msgs_before_user = [m for m in messages_before_user if m.sender == "ai"]
+    current_main_before_user = None
+    for m in ai_msgs_before_user[1:]:
+        if _is_main_question_message(m):
+            current_main_before_user = m
+
     if user_msg is None:
-        user_msg = models.Message(interview_id=interview_id, sender="user", content=content)
+        user_msg = models.Message(
+            interview_id=interview_id,
+            sender="user",
+            content=content,
+            round_index=current_main_before_user.round_index if current_main_before_user else 0,
+            parent_question_id=current_main_before_user.id if current_main_before_user else None,
+            action="ANSWER",
+            source="candidate",
+        )
         db.add(user_msg)
         db.commit()
         db.refresh(user_msg)
     else:
         content = user_msg.content or content
+        if not user_msg.action:
+            user_msg.round_index = current_main_before_user.round_index if current_main_before_user else 0
+            user_msg.parent_question_id = current_main_before_user.id if current_main_before_user else None
+            user_msg.action = "ANSWER"
+            user_msg.source = "candidate"
+            db.commit()
+            db.refresh(user_msg)
 
     messages = db.query(models.Message).filter(models.Message.interview_id == interview_id).order_by(models.Message.created_at.asc()).all()
     ai_msgs = [m for m in messages if m.sender == "ai"]
@@ -825,14 +1076,16 @@ def _load_turn_context(interview_id: int, content: str, db: Session, user_id: in
     main_questions_asked = []
     current_follow_up_count = 0
     for m in ai_msgs[1:]:
-        if m.category and "FOLLOW_UP" not in m.category:
+        if _is_main_question_message(m):
             main_questions_asked.append(m)
             current_follow_up_count = 0
-        else:
+        elif _is_follow_up_message(m):
             current_follow_up_count += 1
 
     question_count = len(main_questions_asked)
-    n = interview.total_rounds or 6
+    base_rounds = interview.total_rounds or 6
+    repo_rounds = _repo_round_count_for_custom_questions(_custom_questions_for_interview(interview))
+    n = base_rounds + repo_rounds
 
     return {
         "interview": interview,
@@ -843,6 +1096,8 @@ def _load_turn_context(interview_id: int, content: str, db: Session, user_id: in
         "main_questions_asked": main_questions_asked,
         "current_follow_up_count": current_follow_up_count,
         "question_count": question_count,
+        "base_rounds": base_rounds,
+        "repo_rounds": repo_rounds,
         "n": n,
     }
 
@@ -856,6 +1111,8 @@ def _store_closing_turn(db: Session, interview: models.Interview, interview_id: 
         sender="ai",
         content=_closing_message(),
         category="closing",
+        action="CLOSE",
+        source="system",
     )
     db.add(ai_msg)
     db.commit()
@@ -876,28 +1133,23 @@ def _plan_interview_turn(ctx: dict, db: Session, user_id: int) -> dict:
     main_questions_asked = ctx["main_questions_asked"]
     current_follow_up_count = ctx["current_follow_up_count"]
     question_count = ctx["question_count"]
+    base_rounds = ctx["base_rounds"]
+    repo_rounds = ctx["repo_rounds"]
     n = ctx["n"]
     skipped_or_boundary = _is_skip_or_boundary_answer(ctx["content"])
 
     # 4. Determine Stage & Next Target
-    # v4 新逻辑：4 段式覆盖赛题要求的全部题型
-    #   有 GitHub 深挖时：scenario → project → problem_solving → behavioral
+    # v5 节奏：用户设置的 total_rounds 只计算常规题；GitHub 项目深挖按仓库数额外追加。
+    #   有 GitHub 深挖时：scenario → 每个项目 1 题 → problem_solving → behavioral
     #   无 GitHub 深挖时：scenario → problem_solving → behavioral
-    custom_questions_list = []
-    if interview.custom_questions:
-        try:
-            custom_questions_list = json.loads(interview.custom_questions)
-        except Exception:
-            custom_questions_list = []
-
+    custom_questions_list = _custom_questions_for_interview(interview)
     has_custom = len(custom_questions_list) > 0
     if has_custom:
-        # 4 段分布：为 GitHub 项目深挖预留明确轮次，多仓库时尽量覆盖更多仓库。
-        custom_repo_count = len({q.get("repo") for q in custom_questions_list if q.get("repo")}) or 1
-        scenario_end = max(1, n // 4)
-        project_rounds = min(custom_repo_count, max(1, n // 3))
-        project_end = min(n, scenario_end + project_rounds)
-        solving_end = min(n, project_end + max(1, (n - project_end) // 2))
+        scenario_end = max(1, base_rounds // 3)
+        project_end = min(n, scenario_end + repo_rounds)
+        remaining_regular_rounds = max(0, base_rounds - scenario_end)
+        solving_rounds = max(1, remaining_regular_rounds // 2) if remaining_regular_rounds else 0
+        solving_end = min(n, project_end + solving_rounds)
         if question_count < scenario_end:
             current_stage = "business_scenario"
         elif question_count < project_end:
@@ -908,8 +1160,8 @@ def _plan_interview_turn(ctx: dict, db: Session, user_id: int) -> dict:
             current_stage = "behavioral"
     else:
         # 3 段分布
-        scenario_end = max(1, n // 3)
-        solving_end = scenario_end + max(1, n // 3)
+        scenario_end = max(1, base_rounds // 3)
+        solving_end = scenario_end + max(1, base_rounds // 3)
         if question_count < scenario_end:
             current_stage = "business_scenario"
         elif question_count < solving_end:
@@ -924,39 +1176,24 @@ def _plan_interview_turn(ctx: dict, db: Session, user_id: int) -> dict:
 
     if current_stage == "project" and has_custom:
         # 项目深挖题走强制队列：按生成顺序挑第一道未问过的，避免面试官模型跳过 GitHub 内容。
+        custom_questions_list = [_with_question_identity(q, "project") for q in custom_questions_list]
+        asked_repo_keys = {
+            _repo_key_for_question(q)
+            for q in custom_questions_list
+            if _question_was_asked(q.get("question", ""), ai_msgs, q.get("question_id", ""))
+        }
         available_custom = [
             q for q in custom_questions_list
-            if not _question_was_asked(q.get("question", ""), ai_msgs)
+            if _repo_key_for_question(q) not in asked_repo_keys
+            and not _question_was_asked(q.get("question", ""), ai_msgs, q.get("question_id", ""))
         ]
         if available_custom:
-            asked_repos = {
-                q.get("repo")
-                for q in custom_questions_list
-                if _question_was_asked(q.get("question", ""), ai_msgs)
-            }
-            available_custom.sort(key=lambda q: q.get("repo") in asked_repos)
-            target_q_obj = available_custom[0]
+            target_q_obj = _with_repo_project_context(available_custom[0])
         else:
             # 定制问完了，降级到静态 project 题库
-            potential_next = get_questions_by_category(role_key, "project", interview.difficulty, kp_list)
-            available_next = [q for q in potential_next if not _question_was_asked(q["question"], ai_msgs)]
-            target_q_obj = random.choice(available_next if available_next else potential_next) if potential_next else {"question": "继续谈谈你的项目经验吧。", "key_points": []}
+            target_q_obj = _select_unasked_question(role_key, "project", interview.difficulty, kp_list, ai_msgs)
     else:
-        potential_next = get_questions_by_category(role_key, current_stage, interview.difficulty, kp_list)
-
-        # 降级 1：若带难度过滤后没题（典型场景：behavioral 题库难度分布不全），去掉 knowledge_points 过滤
-        if not potential_next and kp_list:
-            potential_next = get_questions_by_category(role_key, current_stage, interview.difficulty, None)
-
-        # 降级 2：换一种难度兜底（优先 medium）
-        if not potential_next:
-            for fallback_diff in ["中等", "简单", "困难"]:
-                potential_next = get_questions_by_category(role_key, current_stage, fallback_diff, None)
-                if potential_next:
-                    break
-
-        available_next = [q for q in potential_next if not _question_was_asked(q["question"], ai_msgs)]
-        target_q_obj = random.choice(available_next if available_next else potential_next) if potential_next else {"question": "请继续。", "key_points": []}
+        target_q_obj = _select_unasked_question(role_key, current_stage, interview.difficulty, kp_list, ai_msgs)
 
     # 5. Prepare LLM Context
     history_str = ""
@@ -964,16 +1201,19 @@ def _plan_interview_turn(ctx: dict, db: Session, user_id: int) -> dict:
         role_name = "面试官" if m.sender == "ai" else "候选人"
         history_str += f"{role_name}: {m.content}\n"
 
-    last_main_q = main_questions_asked[-1] if main_questions_asked else ai_msgs[0]
+    last_main_q = main_questions_asked[-1] if main_questions_asked else None
 
     force_next = ""
     max_follow_ups = _max_follow_ups_for_interview(n)
-    force_transition = skipped_or_boundary or current_follow_up_count >= max_follow_ups
-    if force_transition:
-        force_next = "【系统指令：强制切换】候选人已表达不会、跳过，或当前问题追问已到上限。必须结束当前问题，不要重复追问同一个知识点，直接进入下一题。"
-    if current_stage == "project" and has_custom and not force_transition:
+    follow_up_limit_reached = bool(last_main_q) and current_follow_up_count >= max_follow_ups
+    force_transition = skipped_or_boundary
+    if skipped_or_boundary:
+        force_next = "【系统指令：强制切换】候选人已表达不会、跳过或指出问题重复。必须结束当前问题，不要重复追问同一个知识点，直接进入下一题。"
+    elif follow_up_limit_reached:
+        force_next = "【系统指令：追问上限】当前主题目的追问次数已到上限。请自然总结候选人刚才的回答，然后进入下一题；不要继续围绕同一个知识点追问。"
+    if current_stage == "project" and has_custom and not skipped_or_boundary:
         repo_name = target_q_obj.get("repo", "")
-        force_next = f"【系统指令：GitHub 项目深挖】必须结束当前话题并切换到项目深挖。下一题必须围绕候选人的 GitHub 仓库{repo_name}，必须自然问出：{target_q_obj.get('question', '')}"
+        force_next = f"【系统指令：GitHub 项目深挖】必须结束当前话题并切换到项目深挖。下一题必须围绕候选人的 GitHub 仓库{repo_name}，并且必须用清晰句式自然问出：{target_q_obj.get('question', '')}"
 
     # Check if this is the absolute last round
     is_final_move = False
@@ -992,11 +1232,13 @@ def _plan_interview_turn(ctx: dict, db: Session, user_id: int) -> dict:
         "last_main_q": last_main_q,
         "force_next": force_next,
         "force_transition": force_transition,
+        "follow_up_limit_reached": follow_up_limit_reached,
         "skipped_or_boundary": skipped_or_boundary,
+        "is_intro_move": last_main_q is None,
         "is_final_move": is_final_move,
         "target_next_text": target_next_text,
         "knowledge_points": _knowledge_points_for_prompt(db, interview, user_id),
-        "expected_points": "、".join(target_q_obj.get("key_points") or target_q_obj.get("expected_points") or ["技术准确性", "实践经验"]),
+        "expected_points": _expected_points_for_main_question(role_key, interview, last_main_q),
     }
 
 
@@ -1037,11 +1279,30 @@ def _finalize_ai_turn(db: Session, ctx: dict, plan: dict, llm_resp: dict):
     if llm_resp["action"] == "FOLLOW_UP":
         msg_category = f"{plan['current_stage']}_FOLLOW_UP"
 
+    is_follow_up = llm_resp["action"] == "FOLLOW_UP"
+    last_main_q = plan.get("last_main_q")
+    target_q_obj = plan.get("target_q_obj") or {}
+    round_index = getattr(last_main_q, "round_index", None) if is_follow_up and last_main_q else question_count + 1
+    parent_question_id = last_main_q.id if is_follow_up and last_main_q else None
+    if is_follow_up:
+        parent_qid = getattr(last_main_q, "question_id", "") if last_main_q else "unknown"
+        follow_index = ctx["current_follow_up_count"] + 1
+        question_id = f"{parent_qid}:followup:{follow_index}"
+        source = "llm_follow_up"
+    else:
+        question_id = target_q_obj.get("question_id")
+        source = target_q_obj.get("source")
+
     ai_msg = models.Message(
         interview_id=interview.id,
         sender="ai",
         content=llm_resp["text"],
         category=msg_category,
+        round_index=round_index,
+        question_id=question_id,
+        parent_question_id=parent_question_id,
+        action=llm_resp["action"],
+        source=source,
     )
     db.add(ai_msg)
     db.commit()
@@ -1066,6 +1327,8 @@ async def process_message_logic(interview_id: int, content: str, db: Session, us
     # 6. Generate AI Response
     if plan["is_final_move"]:
         llm_resp = {"action": "MOVE_NEXT", "text": _closing_message()}
+    elif plan["is_intro_move"]:
+        llm_resp = {"action": "MOVE_NEXT", "text": _first_question_message(plan["target_next_text"])}
     elif plan["force_transition"]:
         llm_resp = {"action": "MOVE_NEXT", "text": _move_next_message(plan["target_next_text"], skipped=plan["skipped_or_boundary"])}
     else:

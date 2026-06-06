@@ -61,6 +61,11 @@ class MessageResponse(BaseModel):
     id: int
     sender: str
     content: str
+    round_index: Optional[int] = None
+    question_id: Optional[str] = None
+    parent_question_id: Optional[int] = None
+    action: Optional[str] = None
+    source: Optional[str] = None
     created_at: datetime
     is_final: bool = False
     class Config:

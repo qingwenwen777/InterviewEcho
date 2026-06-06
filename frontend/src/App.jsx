@@ -1262,7 +1262,10 @@ function StartSettingsModal({ role, open, sectionState, onClose, onConfirm }) {
     : selectedSections.length
       ? `已选 ${selectedSections.length} 项`
       : '默认完整流程'
-  const roundText = `${rounds} 轮 · ${roundsTone(rounds)}`
+  const roundText = selectedRepoCount
+    ? `${rounds} 常规轮 + ${selectedRepoCount} 项目轮`
+    : `${rounds} 轮 · ${roundsTone(rounds)}`
+  const repoRoundHint = selectedRepoCount ? `项目深挖将额外增加 ${selectedRepoCount} 轮，每个项目 1 题。` : ''
   const roundProgress = `${Math.min(100, Math.max(0, ((Number(rounds) - 2) / 8) * 100))}%`
 
   if (!open || !role) return null
@@ -1368,6 +1371,7 @@ function StartSettingsModal({ role, open, sectionState, onClose, onConfirm }) {
                 <span>标准</span>
                 <span>深</span>
               </div>
+              {repoRoundHint && <div className="muted-row">{repoRoundHint}</div>}
             </section>
           </div>
 
@@ -1488,7 +1492,7 @@ function StartSettingsModal({ role, open, sectionState, onClose, onConfirm }) {
                 <em>（可选）</em>
               </span>
               <span className="github-toggle-meta">
-                {selectedRepoCount ? `已添加 ${selectedRepoCount} 个` : '展开添加'}
+                {selectedRepoCount ? `已添加 ${selectedRepoCount} 个 · 额外 ${selectedRepoCount} 轮` : '展开添加'}
                 <ChevronDown size={18} />
               </span>
             </button>
