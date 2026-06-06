@@ -181,6 +181,8 @@ const wait = (ms) =>
   new Promise((resolve) => {
     window.setTimeout(resolve, ms)
   })
+const INTERVIEW_AUTO_END_MIN_DELAY_MS = 4500
+const INTERVIEW_AUTO_END_MAX_DELAY_MS = 8500
 const VOICE_REPLY_POLL_INTERVAL_MS = 1000
 const VOICE_REPLY_MAX_POLL_ATTEMPTS = 90
 const VOICE_REPLY_MAX_POLL_FAILURES = 5
@@ -1573,6 +1575,7 @@ function InterviewRoom() {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [ending, setEnding] = useState(false)
+  const [closingPending, setClosingPending] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [isTranscribing, setIsTranscribing] = useState(false)
   const [focusMode, setFocusMode] = useState(false)
@@ -1586,6 +1589,7 @@ function InterviewRoom() {
   const chunksRef = useRef([])
   const audioRef = useRef(null)
   const spokenMessageKeysRef = useRef(new Set())
+  const autoEndTimerRef = useRef(null)
 
   const scrollToBottom = useCallback(() => {
     window.requestAnimationFrame(() => {
@@ -1595,6 +1599,11 @@ function InterviewRoom() {
 
   const endInterview = useCallback(async () => {
     if (!interviewId || ending) return
+    if (autoEndTimerRef.current) {
+      window.clearTimeout(autoEndTimerRef.current)
+      autoEndTimerRef.current = null
+    }
+    setClosingPending(false)
     setEnding(true)
     toast('评估报告已进入后台生成。', 'info')
     navigate(`/profile?startEvaluation=${interviewId}`, {
@@ -1608,6 +1617,24 @@ function InterviewRoom() {
       },
     })
   }, [ending, interviewId, navigate, role, toast])
+
+  const scheduleAutoEndInterview = useCallback(
+    (finalMessage) => {
+      if (!interviewId || ending || autoEndTimerRef.current) return
+      const readableChars = String(finalMessage?.content || '').replace(/\s/g, '').length
+      const delay = Math.min(
+        INTERVIEW_AUTO_END_MAX_DELAY_MS,
+        Math.max(INTERVIEW_AUTO_END_MIN_DELAY_MS, readableChars * 85),
+      )
+      setClosingPending(true)
+      toast('面试已结束，稍等几秒后为你生成报告。', 'info')
+      autoEndTimerRef.current = window.setTimeout(() => {
+        autoEndTimerRef.current = null
+        endInterview()
+      }, delay)
+    },
+    [endInterview, ending, interviewId, toast],
+  )
 
   useEffect(() => {
     let alive = true
@@ -1643,11 +1670,15 @@ function InterviewRoom() {
     boot()
     return () => {
       alive = false
+      if (autoEndTimerRef.current) {
+        window.clearTimeout(autoEndTimerRef.current)
+        autoEndTimerRef.current = null
+      }
       streamRef.current?.getTracks?.().forEach((track) => track.stop())
     }
   }, [navigate, role, scrollToBottom, searchParams, toast])
 
-  useEffect(scrollToBottom, [messages, sending, scrollToBottom])
+  useEffect(scrollToBottom, [messages, sending, closingPending, scrollToBottom])
 
   useEffect(() => {
     const textarea = composerInputRef.current
@@ -1851,7 +1882,7 @@ function InterviewRoom() {
       return
     }
     const content = input.trim()
-    if (!content || sending || !interviewId) return
+    if (!content || sending || ending || closingPending || !interviewId) return
     setMessages((current) => [...current, { sender: 'user', content, created_at: new Date().toISOString() }])
     setInput('')
     setSending(true)
@@ -1863,10 +1894,9 @@ function InterviewRoom() {
     ])
 
     try {
-      const { isFinal } = await streamAiReply(content, streamKey)
+      const { finalMessage, isFinal } = await streamAiReply(content, streamKey)
       if (isFinal) {
-        toast('已达到建议轮次，准备生成报告。', 'warning')
-        window.setTimeout(endInterview, 1200)
+        scheduleAutoEndInterview(finalMessage)
       }
     } catch (error) {
       dropStreamingMessage(streamKey)
@@ -1876,8 +1906,7 @@ function InterviewRoom() {
           const { data } = await api.post(`/interview/${interviewId}/message`, { content })
           setMessages((current) => [...current, data])
           if (data.is_final) {
-            toast('已达到建议轮次，准备生成报告。', 'warning')
-            window.setTimeout(endInterview, 1200)
+            scheduleAutoEndInterview(data)
           }
         } catch (fallbackError) {
           toast(`消息发送失败：${getErrorMessage(fallbackError)}`, 'error')
@@ -1961,8 +1990,7 @@ function InterviewRoom() {
             )
             if (aiReply) {
               if (aiReply.is_final) {
-                toast('已达到建议轮次，准备生成报告。', 'warning')
-                window.setTimeout(endInterview, 1200)
+                scheduleAutoEndInterview(aiReply)
               }
               return
             }
@@ -1977,8 +2005,7 @@ function InterviewRoom() {
         toast('语音已转写，AI 回复生成较慢，你可以稍后刷新查看。', 'info')
       }
       if (data.ai_message?.is_final) {
-        toast('已达到建议轮次，准备生成报告。', 'warning')
-        window.setTimeout(endInterview, 1200)
+        scheduleAutoEndInterview(data.ai_message)
       }
     } catch (error) {
       toast(`语音处理失败：${getErrorMessage(error)}`, 'error')
@@ -2003,7 +2030,7 @@ function InterviewRoom() {
           <button className="icon-button" onClick={() => setFocusMode((value) => !value)} title="切换沉浸模式">
             {focusMode ? <Sun size={17} /> : <Moon size={17} />}
           </button>
-          <button className="button danger small" onClick={endInterview} disabled={ending || !interviewId}>
+          <button className="button danger small" onClick={endInterview} disabled={ending || closingPending || !interviewId}>
             结束面试
           </button>
         </div>
@@ -2070,6 +2097,12 @@ function InterviewRoom() {
           {sending && !messages.some((message) => message.status === 'streaming') && (
             <ChatBubble message={{ sender: 'ai', content: '正在分析你的回答并组织下一轮追问...', status: 'typing' }} />
           )}
+          {closingPending && (
+            <div className="interview-closing-strip" role="status">
+              <LoaderCircle className="spin" size={15} />
+              <span>面试已结束，正在整理评估报告。</span>
+            </div>
+          )}
         </div>
 
         <div
@@ -2085,8 +2118,8 @@ function InterviewRoom() {
             ref={composerInputRef}
             value={input}
             rows={1}
-            disabled={sending || ending}
-            placeholder="输入你的回答，Enter 发送，Shift + Enter 换行"
+            disabled={sending || ending || closingPending}
+            placeholder={closingPending ? '面试已结束，正在准备评估报告' : '输入你的回答，Enter 发送，Shift + Enter 换行'}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey) {
@@ -2098,7 +2131,7 @@ function InterviewRoom() {
           <div className="composer-actions">
             <button
               className={`mic-button ${isRecording ? 'recording' : ''}`}
-              disabled={sending || ending}
+              disabled={sending || ending || closingPending}
               onClick={isRecording ? stopRecording : startRecording}
               title={isRecording ? '停止录音' : '开始录音'}
             >
@@ -2106,7 +2139,7 @@ function InterviewRoom() {
             </button>
             <button
               className="send-button"
-              disabled={sending || ending || (!input.trim() && !isRecording)}
+              disabled={sending || ending || closingPending || (!input.trim() && !isRecording)}
               onClick={sendMessage}
               title="发送"
               aria-label="发送"

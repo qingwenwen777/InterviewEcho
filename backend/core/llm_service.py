@@ -129,7 +129,7 @@ def _extract_partial_json_string(buffer: str, key: str):
 async def generate_llm_response(role, question, expected_points, conversation_history, target_next_question, difficulty="medium", knowledge_points="", force_next_instruction=""):
     """
     Generate conversational follow-up or next question using AI logic.
-    Returns: {"action": "FOLLOW_UP" | "MOVE_NEXT", "text": "..."}
+    Returns: {"action": "FOLLOW_UP" | "MOVE_NEXT" | "CLOSE", "text": "..."}
     """
     system_prompt = await _build_interviewer_system_prompt(
         role, question, expected_points, conversation_history,
@@ -150,6 +150,11 @@ async def generate_llm_response(role, question, expected_points, conversation_hi
         }
     except Exception as e:
         print(f"Error calling LLM: {e}")
+        if "面试结束" in (force_next_instruction or ""):
+            return {
+                "action": "CLOSE",
+                "text": "【面试结束】谢谢你刚才的补充。本轮模拟面试到这里结束，接下来我会结合你的整体回答生成评估报告。"
+            }
         return {
             "action": "MOVE_NEXT",
             "text": "抱歉，刚才信号有点不好。我们直接看下一个话题： " + target_next_question
@@ -167,7 +172,12 @@ async def generate_llm_response_stream(role, question, expected_points, conversa
     of ``text`` is streamed to the candidate. On any failure a single ``done``
     event with a graceful fallback is emitted so callers always terminate.
     """
-    fallback_text = "抱歉，刚才信号有点不好。我们直接看下一个话题： " + target_next_question
+    is_closing_turn = "面试结束" in (force_next_instruction or "")
+    fallback_text = (
+        "【面试结束】谢谢你刚才的补充。本轮模拟面试到这里结束，接下来我会结合你的整体回答生成评估报告。"
+        if is_closing_turn
+        else "抱歉，刚才信号有点不好。我们直接看下一个话题： " + target_next_question
+    )
     try:
         system_prompt = await _build_interviewer_system_prompt(
             role, question, expected_points, conversation_history,
@@ -210,11 +220,11 @@ async def generate_llm_response_stream(role, question, expected_points, conversa
             text, _ = _extract_partial_json_string(buffer, "text")
             text = text or ""
         if not text:
-            text = "好了，我们进行下一个话题。"
-        yield {"type": "done", "action": action, "text": text}
+            text = fallback_text if is_closing_turn else "好了，我们进行下一个话题。"
+        yield {"type": "done", "action": "CLOSE" if is_closing_turn else action, "text": text}
     except Exception as e:
         print(f"Error streaming LLM: {type(e).__name__}: {e}")
-        yield {"type": "done", "action": "MOVE_NEXT", "text": fallback_text}
+        yield {"type": "done", "action": "CLOSE" if is_closing_turn else "MOVE_NEXT", "text": fallback_text}
 
 async def polish_text(text: str):
     """

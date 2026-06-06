@@ -141,6 +141,43 @@ def test_follow_up_limit_uses_llm_path_and_current_question_points():
     assert plan["target_next_text"] != question["question"]
 
 
+def test_final_round_uses_natural_closing_plan():
+    _patch_candidate_context()
+    interview_obj = SimpleNamespace(
+        role="Java后端开发工程师",
+        difficulty="中等",
+        knowledge_points="[]",
+        total_rounds=1,
+        custom_questions=None,
+    )
+    main = Msg(
+        sender="ai",
+        category="problem_solving",
+        content="介绍一下 JVM 的运行时数据区（内存布局）？",
+        action="MOVE_NEXT",
+        source="question_bank",
+        round_index=1,
+    )
+    plan = interview._plan_interview_turn(_ctx(interview_obj, [main], [main], 1), None, 1)
+
+    assert plan["is_final_move"]
+    assert plan["target_next_text"].startswith("【面试结束】")
+    assert "承接候选人刚才的回答" in plan["force_next"]
+    assert "禁止再提出任何新问题" in plan["force_next"]
+
+
+def test_final_postprocess_marks_close_and_keeps_end_marker():
+    plan = {"is_final_move": True, "current_stage": "behavioral", "has_custom": False}
+    response = interview._postprocess_llm_resp(
+        {"action": "FOLLOW_UP", "text": "谢谢你的回答，本轮模拟面试到这里结束，接下来会生成评估报告。"},
+        plan,
+        [],
+    )
+
+    assert response["action"] == "CLOSE"
+    assert response["text"].startswith("【面试结束】")
+
+
 def test_closing_message_has_explicit_marker():
     assert interview._closing_message().startswith("【面试结束】")
 
@@ -156,6 +193,8 @@ def test_structured_message_fields_drive_round_classification():
 if __name__ == "__main__":
     test_repo_deepdive_adds_extra_rounds_and_asks_one_question_per_repo()
     test_follow_up_limit_uses_llm_path_and_current_question_points()
+    test_final_round_uses_natural_closing_plan()
+    test_final_postprocess_marks_close_and_keeps_end_marker()
     test_closing_message_has_explicit_marker()
     test_structured_message_fields_drive_round_classification()
     print("interview planning tests passed")

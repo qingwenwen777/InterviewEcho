@@ -230,7 +230,16 @@ def _max_follow_ups_for_interview(total_rounds: int) -> int:
 
 
 def _closing_message() -> str:
-    return "【面试结束】好的，所有设定题目已经完成，本轮模拟面试到这里结束。感谢你的回答，接下来我会为你生成评估报告。"
+    return "【面试结束】谢谢你刚才的补充。本轮模拟面试到这里结束，接下来我会结合你的整体回答生成评估报告。"
+
+
+def _normalize_closing_text(text: str) -> str:
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return _closing_message()
+    if not cleaned.startswith("【面试结束】"):
+        cleaned = f"【面试结束】{cleaned}"
+    return cleaned
 
 
 def _move_next_message(question: str, skipped: bool = False) -> str:
@@ -681,31 +690,16 @@ async def send_message_stream(interview_id: int, msg: schemas.MessageSend, db: S
     user_msg = ctx["user_msg"]
     user_payload = schemas.MessageResponse.model_validate(user_msg).model_dump(mode="json")
 
-    # Round budget already exhausted: emit the closing message in one shot.
-    if ctx["question_count"] >= ctx["n"]:
-        response, _ = _store_closing_turn(db, interview, interview_id)
-        closing_payload = response.model_dump(mode="json")
-
-        async def closing_stream():
-            yield _sse({"type": "user", "message": user_payload})
-            yield _sse({"type": "delta", "text": response.content})
-            yield _sse({"type": "done", "message": closing_payload, "is_final": True})
-
-        return StreamingResponse(closing_stream(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
-
     plan = _plan_interview_turn(ctx, db, user_id)
 
     async def event_stream():
         try:
             yield _sse({"type": "user", "message": user_payload})
 
-            # Deterministic transitions (closing / forced skip) do not need token
-            # streaming, but we still emit the text as a single delta so the
-            # frontend rendering path stays identical.
-            if plan["is_final_move"]:
-                llm_resp = {"action": "MOVE_NEXT", "text": _closing_message()}
-                yield _sse({"type": "delta", "text": llm_resp["text"]})
-            elif plan["is_intro_move"]:
+            # Deterministic transitions do not need token streaming, but we
+            # still emit the text as a single delta so the frontend rendering
+            # path stays identical.
+            if plan["is_intro_move"]:
                 llm_resp = {"action": "MOVE_NEXT", "text": _first_question_message(plan["target_next_text"])}
                 yield _sse({"type": "delta", "text": llm_resp["text"]})
             elif plan["force_transition"]:
@@ -1219,8 +1213,12 @@ def _plan_interview_turn(ctx: dict, db: Session, user_id: int) -> dict:
     is_final_move = False
     if question_count >= n:
         is_final_move = True
-        target_next_text = "面试即将结束，请做一个结语。"
-        force_next = "【系统指令：面试结束】请给出一个礼貌的结束语表示感谢。禁止再提出任何新问题或引导后续对话内容。"
+        target_next_text = _closing_message()
+        force_next = (
+            "【系统指令：面试结束】这是最后一轮。请先用一句话承接候选人刚才的回答，"
+            "再明确说明本轮模拟面试已结束并将生成评估报告。禁止再提出任何新问题、追问或引导后续对话。"
+            "输出的 text 必须以【面试结束】开头。"
+        )
     else:
         target_next_text = target_q_obj["question"]
 
@@ -1243,7 +1241,12 @@ def _plan_interview_turn(ctx: dict, db: Session, user_id: int) -> dict:
 
 
 def _postprocess_llm_resp(llm_resp: dict, plan: dict, ai_msgs: list) -> dict:
-    """Apply project-deepdive forcing and repeated-follow-up guards (step 6 tail)."""
+    """Apply closing, project-deepdive forcing, and repeated-follow-up guards."""
+    if plan["is_final_move"]:
+        llm_resp["action"] = "CLOSE"
+        llm_resp["text"] = _normalize_closing_text(llm_resp.get("text", ""))
+        return llm_resp
+
     if plan["current_stage"] == "project" and plan["has_custom"]:
         llm_resp["action"] = "MOVE_NEXT"
         llm_resp["text"] = _with_forced_question(
@@ -1268,16 +1271,19 @@ def _finalize_ai_turn(db: Session, ctx: dict, plan: dict, llm_resp: dict):
     n = ctx["n"]
 
     final_is_ended = False
-    # Only end if we have asked exactly N main questions AND the AI says MOVE_NEXT
-    # (meaning no more follow-ups for the last question)
-    if question_count >= n and llm_resp["action"] == "MOVE_NEXT":
+    # End only on the explicit closing plan, or on the legacy MOVE_NEXT/CLOSE
+    # signal after the configured main-question budget has been exhausted.
+    if plan.get("is_final_move") or (question_count >= n and llm_resp["action"] in {"MOVE_NEXT", "CLOSE"}):
         final_is_ended = True
         interview.status = "completed"
+        interview.end_time = interview.end_time or datetime.utcnow()
         db.commit()
 
     msg_category = plan["current_stage"]
     if llm_resp["action"] == "FOLLOW_UP":
         msg_category = f"{plan['current_stage']}_FOLLOW_UP"
+    elif plan.get("is_final_move"):
+        msg_category = "closing"
 
     is_follow_up = llm_resp["action"] == "FOLLOW_UP"
     last_main_q = plan.get("last_main_q")
@@ -1289,6 +1295,10 @@ def _finalize_ai_turn(db: Session, ctx: dict, plan: dict, llm_resp: dict):
         follow_index = ctx["current_follow_up_count"] + 1
         question_id = f"{parent_qid}:followup:{follow_index}"
         source = "llm_follow_up"
+    elif plan.get("is_final_move"):
+        round_index = None
+        question_id = "closing"
+        source = "system_closing"
     else:
         question_id = target_q_obj.get("question_id")
         source = target_q_obj.get("source")
@@ -1318,16 +1328,10 @@ async def process_message_logic(interview_id: int, content: str, db: Session, us
     interview = ctx["interview"]
     user_msg = ctx["user_msg"]
 
-    if ctx["question_count"] >= ctx["n"]:
-        response, _ = _store_closing_turn(db, interview, interview_id)
-        return response, user_msg.id
-
     plan = _plan_interview_turn(ctx, db, user_id)
 
     # 6. Generate AI Response
-    if plan["is_final_move"]:
-        llm_resp = {"action": "MOVE_NEXT", "text": _closing_message()}
-    elif plan["is_intro_move"]:
+    if plan["is_intro_move"]:
         llm_resp = {"action": "MOVE_NEXT", "text": _first_question_message(plan["target_next_text"])}
     elif plan["force_transition"]:
         llm_resp = {"action": "MOVE_NEXT", "text": _move_next_message(plan["target_next_text"], skipped=plan["skipped_or_boundary"])}
