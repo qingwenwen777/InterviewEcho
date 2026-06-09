@@ -1,36 +1,64 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 venv/
 .venv/
 
-# Node
+# Node / frontend
 node_modules/
 dist/
+build/
+.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# 数据库
+# Runtime data
+logs/
+*.log
+uploads/
+backend/uploads/
+backend/tests/audio_samples/
+*.wav
+*.mp3
+*.m4a
+*.webm
+
+# Database and generated indexes
 *.db
 *.sqlite
+*.sqlite3
+*.dump
+vector_index.json
+backend/rag/.source_hash
 
-# 系统文件
+# OS and editor files
 .DS_Store
+._*
 Thumbs.db
-
-# IDE
 .idea/
 .vscode/
 
-#scripts 整个目录
+# Local backup/temp files
+*.bak
+*.tmp
+*.swp
+*.swo
+
+# Scripts: keep the production deploy helper only
 scripts/*
 !scripts/deploy.ps1
-
-# RAG向量仓库
-vector_index.json
-
-
-# 表达分析测试音频（本地，每人录音不同）
-backend/tests/audio_samples/
-
-# 合并操作产生的备份文件
-*.bak
-

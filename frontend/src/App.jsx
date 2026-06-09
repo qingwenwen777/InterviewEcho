@@ -38,6 +38,7 @@ import {
   BrainCircuit,
   CalendarClock,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Code2,
   Download,
@@ -1578,6 +1579,7 @@ function InterviewRoom() {
   const [closingPending, setClosingPending] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [isTranscribing, setIsTranscribing] = useState(false)
+  const [composerMultiline, setComposerMultiline] = useState(false)
   const [focusMode, setFocusMode] = useState(false)
   const [ttsSettings, setTtsSettings] = useState(readStoredTtsSettings)
   const [ttsLoadingId, setTtsLoadingId] = useState(null)
@@ -1688,6 +1690,8 @@ function InterviewRoom() {
     const nextHeight = Math.min(textarea.scrollHeight, maxHeight)
     textarea.style.height = `${Math.max(nextHeight, 38)}px`
     textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden'
+    const isMultiline = textarea.scrollHeight > 56
+    setComposerMultiline((current) => (current === isMultiline ? current : isMultiline))
   }, [input])
 
   useEffect(() => {
@@ -2015,8 +2019,6 @@ function InterviewRoom() {
     }
   }
 
-  const composerExpanded = input.length > 80 || input.includes('\n')
-
   return (
     <div className={`interview-room ${focusMode ? 'focus' : ''}`}>
       {ending && <FullscreenLoader title="正在生成评估报告" text="正在汇总整场对话、表达数据与学习计划。" />}
@@ -2106,7 +2108,7 @@ function InterviewRoom() {
         </div>
 
         <div
-          className={`composer ${composerExpanded ? 'composer-expanded' : ''} ${isRecording ? 'composer-recording' : ''} ${isTranscribing ? 'composer-transcribing' : ''}`}
+          className={`composer ${composerMultiline ? 'composer-multiline' : ''} ${isRecording ? 'composer-recording' : ''} ${isTranscribing ? 'composer-transcribing' : ''}`}
         >
           {(isRecording || isTranscribing) && (
             <div className={`recording-strip ${isRecording ? 'recording' : 'transcribing'}`} aria-live="polite">
@@ -2821,6 +2823,7 @@ function ReportPage() {
   const [report, setReport] = useState(location.state?.evaluation || null)
   const [reportStatus, setReportStatus] = useState(location.state?.evaluationStatus || (shouldStartEvaluation ? 'evaluating' : 'loading'))
   const [reportError, setReportError] = useState('')
+  const [activeRoundReviewIndex, setActiveRoundReviewIndex] = useState(0)
 
   useEffect(() => {
     if (report || !id) return undefined
@@ -2889,6 +2892,16 @@ function ReportPage() {
   }, [id, report, shouldStartEvaluation])
 
   const parsedReport = useMemo(() => parseReportData(report), [report])
+  const roundReviews = parsedReport.round_reviews || []
+  useEffect(() => {
+    if (!roundReviews.length && activeRoundReviewIndex !== 0) {
+      setActiveRoundReviewIndex(0)
+      return
+    }
+    if (roundReviews.length && activeRoundReviewIndex > roundReviews.length - 1) {
+      setActiveRoundReviewIndex(roundReviews.length - 1)
+    }
+  }, [activeRoundReviewIndex, roundReviews.length])
   useDampedSnapScroll(pageRef)
 
   if (!report) {
@@ -2907,6 +2920,7 @@ function ReportPage() {
   }
 
   const expressionMetrics = report.expression_metrics
+  const resumeMatch = report.resume_match || parsedReport.resume_match || null
   const expressionSummary = expressionMetrics?.metrics_summary || {}
   const expressionFeedback = expressionMetrics?.feedback || {}
   const expressionCards = [
@@ -3000,6 +3014,47 @@ function ReportPage() {
           </section>
         </div>
       </section>
+
+      {roundReviews.length > 0 && (
+        <section className="panel report-section round-review-section review-snap-section">
+          <div className="panel-head">
+            <div>
+              <h2>逐轮回答改进建议</h2>
+              <p>按题目顺序复盘每次回答的具体改法。</p>
+            </div>
+          </div>
+          <RoundReviewCarousel
+            reviews={roundReviews}
+            activeIndex={activeRoundReviewIndex}
+            onChange={setActiveRoundReviewIndex}
+          />
+        </section>
+      )}
+
+      {resumeMatch?.has_resume && (
+        <section className="panel report-section resume-match-section review-snap-section">
+          <div className="panel-head">
+            <div>
+              <h2>简历匹配度</h2>
+              <p>基于简历资料、简历深挖题和整场回答交叉验证。</p>
+            </div>
+          </div>
+
+          <div className="resume-match-layout">
+            <article className="resume-match-score">
+              <span>匹配度</span>
+              <b>{Number(resumeMatch.score || 0).toFixed(1)}</b>
+              <p>{resumeMatch.summary || '暂无简历匹配度摘要。'}</p>
+            </article>
+            <div className="report-grid resume-match-grid">
+              <ReportBlock tone="green" title="已验证亮点" items={resumeMatch.verified_strengths || []} />
+              <ReportBlock tone="amber" title="风险缺口" items={resumeMatch.consistency_risks || []} />
+              <ReportBlock tone="neutral" title="简历修改建议" items={resumeMatch.resume_improvements || []} />
+              <ReportBlock tone="neutral" title="关键证据" items={resumeMatch.evidence || []} />
+            </div>
+          </div>
+        </section>
+      )}
 
       {expressionMetrics && (
         <section className="panel report-section expression-section review-snap-section">
@@ -3172,6 +3227,159 @@ function ReportPage() {
         </section>
       )}
     </div>
+  )
+}
+
+function RoundReviewCarousel({ reviews, activeIndex, onChange }) {
+  const touchStartRef = useRef(null)
+  const total = reviews.length
+  const clampIndex = (index) => Math.min(total - 1, Math.max(0, index))
+  const goTo = (index) => {
+    if (!total) return
+    onChange(clampIndex(index))
+  }
+  const handleTouchStart = (event) => {
+    const touch = event.touches?.[0]
+    touchStartRef.current = touch ? { x: touch.clientX, y: touch.clientY } : null
+  }
+  const handleTouchEnd = (event) => {
+    const start = touchStartRef.current
+    const touch = event.changedTouches?.[0]
+    touchStartRef.current = null
+    if (!start || !touch) return
+    const dx = touch.clientX - start.x
+    const dy = touch.clientY - start.y
+    if (Math.abs(dx) < 44 || Math.abs(dx) < Math.abs(dy)) return
+    goTo(activeIndex + (dx < 0 ? 1 : -1))
+  }
+
+  if (!total) return null
+
+  return (
+    <div className="round-review-carousel">
+      <div className="round-review-toolbar">
+        <div className="round-review-counter">
+          <span>{String(activeIndex + 1).padStart(2, '0')}</span>
+          <b>/ {String(total).padStart(2, '0')}</b>
+        </div>
+        <div className="round-review-controls">
+          <button
+            className="icon-button round-review-nav"
+            type="button"
+            onClick={() => goTo(activeIndex - 1)}
+            disabled={activeIndex <= 0}
+            aria-label="上一轮"
+            title="上一轮"
+          >
+            <ChevronLeft size={18} />
+          </button>
+          <button
+            className="icon-button round-review-nav"
+            type="button"
+            onClick={() => goTo(activeIndex + 1)}
+            disabled={activeIndex >= total - 1}
+            aria-label="下一轮"
+            title="下一轮"
+          >
+            <ChevronRight size={18} />
+          </button>
+        </div>
+      </div>
+
+      <div className="round-review-viewport" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
+        <div className="round-review-track" style={{ transform: `translateX(-${activeIndex * 100}%)` }}>
+          {reviews.map((review, index) => (
+            <RoundReviewCard
+              key={`round-review-${review.round || index + 1}-${index}`}
+              review={review}
+              index={index}
+              total={total}
+              hidden={index !== activeIndex}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className="round-review-dots" role="tablist" aria-label="逐轮回答">
+        {reviews.map((review, index) => (
+          <button
+            key={`round-review-dot-${review.round || index + 1}-${index}`}
+            className={index === activeIndex ? 'active' : ''}
+            type="button"
+            onClick={() => goTo(index)}
+            aria-label={`第 ${index + 1} 轮`}
+            aria-selected={index === activeIndex}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function RoundReviewCard({ review, index, total, hidden }) {
+  const scoreItems = [
+    { label: '内容', value: review.content_score },
+    { label: '表达', value: review.expression_score },
+    { label: '场景', value: review.business_scenario_score },
+    { label: '技术', value: review.problem_solving_score },
+  ].filter((item) => Number.isFinite(Number(item.value)))
+
+  return (
+    <article className="round-review-card" aria-hidden={hidden}>
+      <header className="round-review-card-head">
+        <div>
+          <span>第 {String(review.round || index + 1).padStart(2, '0')} 轮</span>
+          <h3>{review.question || '本轮问题未记录。'}</h3>
+        </div>
+        <div className="round-review-total">
+          {String(index + 1).padStart(2, '0')}
+          <small>/ {String(total).padStart(2, '0')}</small>
+        </div>
+      </header>
+
+      {scoreItems.length > 0 && (
+        <div className="round-score-pills">
+          {scoreItems.map((item) => (
+            <span key={item.label}>
+              {item.label}
+              <b>{Number(item.value || 0).toFixed(0)}</b>
+            </span>
+          ))}
+        </div>
+      )}
+
+      <div className="round-review-body">
+        <section className="round-answer-summary">
+          <span>回答概述</span>
+          <p>{review.answer_summary || '本轮没有记录到有效回答。'}</p>
+        </section>
+
+        <div className="round-review-columns">
+          <RoundReviewList title="做得好的地方" items={review.strengths} />
+          <RoundReviewList title="可以改进" items={review.improvements} />
+          <RoundReviewList title="建议补充的关键点" items={review.missing_points} />
+        </div>
+
+        <section className="round-better-answer">
+          <span>更优回答方向</span>
+          <p>{review.better_answer || '建议用结论、关键要点、项目例子和边界条件重新组织这轮回答。'}</p>
+        </section>
+      </div>
+    </article>
+  )
+}
+
+function RoundReviewList({ title, items = [] }) {
+  const safeItems = items.length ? items : ['暂无明确记录。']
+  return (
+    <section className="round-review-block">
+      <h4>{title}</h4>
+      <ul>
+        {safeItems.map((item, index) => (
+          <li key={`${title}-${index}`}>{item}</li>
+        ))}
+      </ul>
+    </section>
   )
 }
 
@@ -4500,8 +4708,60 @@ function roleIcon(index) {
   return icons[index % icons.length]
 }
 
+function reportText(value, fallback = '') {
+  if (value == null) return fallback
+  const text = String(value).trim()
+  return text || fallback
+}
+
+function reportItems(value, fallback = []) {
+  if (!Array.isArray(value)) return fallback
+  return value
+    .map((item) => {
+      if (typeof item === 'string') return item.trim()
+      if (item && typeof item === 'object') {
+        return Object.values(item)
+          .map((part) => String(part || '').trim())
+          .filter(Boolean)
+          .join(' / ')
+      }
+      return String(item || '').trim()
+    })
+    .filter(Boolean)
+}
+
+function reportScore(value) {
+  if (value == null) return null
+  const score = Number(value)
+  return Number.isFinite(score) ? score : null
+}
+
+function normalizeRoundReviews(value) {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item, index) => {
+      if (!item || typeof item !== 'object') return null
+      const round = Number.parseInt(item.round, 10) || index + 1
+      const answerSummary = reportText(item.answer_summary || item.summary, '本轮没有记录到有效回答。')
+      return {
+        round,
+        question: reportText(item.question || item.prompt, '本轮问题未记录。'),
+        answer_summary: answerSummary,
+        strengths: reportItems(item.strengths || item.good_points || item.what_went_well, ['暂无明确记录。']),
+        improvements: reportItems(item.improvements || item.areas_to_improve || item.improvement_suggestions, ['暂无明确记录。']),
+        missing_points: reportItems(item.missing_points || item.key_points_to_add || item.suggested_points, ['暂无明确记录。']),
+        better_answer: reportText(item.better_answer || item.better_answer_direction || item.answer_example, '建议用结论、关键要点、项目例子和边界条件重新组织这轮回答。'),
+        content_score: reportScore(item.content_score),
+        expression_score: reportScore(item.expression_score),
+        business_scenario_score: reportScore(item.business_scenario_score),
+        problem_solving_score: reportScore(item.problem_solving_score),
+      }
+    })
+    .filter(Boolean)
+}
+
 function parseReportData(report) {
-  if (!report) return { highlights: [], weaknesses: [], recommendations: '' }
+  if (!report) return { highlights: [], weaknesses: [], recommendations: '', round_reviews: [] }
   if (report.report_json) {
     try {
       const data = typeof report.report_json === 'string' ? JSON.parse(report.report_json) : report.report_json
@@ -4509,15 +4769,19 @@ function parseReportData(report) {
         highlights: data.highlights || data.strengths || [],
         weaknesses: data.weaknesses || [],
         recommendations: data.recommendations || data.improvement_suggestions || '',
+        round_reviews: normalizeRoundReviews(data.round_reviews || report.round_reviews),
+        resume_match: data.resume_match,
       }
     } catch {
-      return { highlights: [], weaknesses: ['报告数据解析异常。'], recommendations: '' }
+      return { highlights: [], weaknesses: ['报告数据解析异常。'], recommendations: '', round_reviews: [] }
     }
   }
   return {
     highlights: report.highlights || report.strengths || [],
     weaknesses: report.weaknesses || [],
     recommendations: report.recommendations || report.improvement_suggestions || '',
+    round_reviews: normalizeRoundReviews(report.round_reviews),
+    resume_match: report.resume_match,
   }
 }
 

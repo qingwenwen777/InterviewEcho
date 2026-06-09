@@ -9,7 +9,17 @@ from services.audio_analysis import analyze_audio
 from services.repo_analyzer import analyze_repo
 from services.tts_service import TTSServiceError, get_tts_options, synthesize_interviewer_audio
 from core.config import settings
-from core.llm_service import generate_llm_response, generate_llm_response_stream, evaluate_full_interview, polish_text, generate_repo_questions, generate_study_plan
+from core.llm_service import (
+    generate_llm_response,
+    generate_llm_response_stream,
+    evaluate_full_interview,
+    polish_text,
+    generate_repo_questions,
+    generate_resume_questions,
+    generate_resume_match_report,
+    generate_study_plan,
+    _normalize_round_reviews,
+)
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
 from typing import List
@@ -35,10 +45,13 @@ def _safe_json_loads(value, default):
         return default
 
 
-def _evaluation_payload(interview: models.Interview, eval_record: models.Evaluation) -> dict:
+def _evaluation_payload(interview: models.Interview, eval_record: models.Evaluation, messages: list | None = None) -> dict:
     report_data = _safe_json_loads(eval_record.report_json, {})
     repo_context = _safe_json_loads(interview.repo_context, None)
     custom_questions = _safe_json_loads(interview.custom_questions, None)
+    round_reviews = report_data.get("round_reviews") or []
+    if not round_reviews and messages:
+        round_reviews = _normalize_round_reviews(messages, [])
 
     return {
         "interview_id": eval_record.interview_id,
@@ -52,6 +65,8 @@ def _evaluation_payload(interview: models.Interview, eval_record: models.Evaluat
         "clarity_score": eval_record.clarity_score or 0,
         "confidence_score": eval_record.confidence_score or 0,
         "expression_metrics": report_data.get("expression_metrics"),
+        "round_reviews": round_reviews,
+        "resume_match": report_data.get("resume_match"),
         "repo_context": repo_context,
         "custom_questions": custom_questions,
         "study_plan": report_data.get("study_plan"),
@@ -81,19 +96,40 @@ def _summary_matches_url(summary: dict, url: str) -> bool:
     return any(_normalize_url(candidate) == target for candidate in candidates if candidate)
 
 
-def _candidate_context_for_prompt(db: Session, user_id: int) -> str:
+def _profile_snapshot_for_interview(db: Session, user_id: int) -> dict:
     profile = db.query(models.UserProfile).filter(models.UserProfile.user_id == user_id).first()
+    if not profile:
+        return {}
+    snapshot = {
+        "headline": profile.headline or "",
+        "target_role": profile.target_role or "",
+        "summary": profile.resume_summary or "",
+        "skills": _safe_json_loads(profile.skills, []),
+        "education": _safe_json_loads(profile.education, []),
+        "experience": _safe_json_loads(profile.experience, []),
+        "projects": _safe_json_loads(profile.projects, []),
+        "resume_excerpt": (profile.resume_text or "")[:2400],
+    }
+    has_resume_signal = any(
+        snapshot.get(key)
+        for key in ("headline", "target_role", "summary", "skills", "education", "experience", "projects", "resume_excerpt")
+    )
+    return snapshot if has_resume_signal else {}
+
+
+def _candidate_context_for_prompt(db: Session, user_id: int) -> str:
+    profile_snapshot = _profile_snapshot_for_interview(db, user_id)
     lines = []
-    if profile:
-        if profile.resume_summary:
-            lines.append(f"简历摘要：{profile.resume_summary}")
-        skills = _safe_json_loads(profile.skills, [])
+    if profile_snapshot:
+        if profile_snapshot.get("summary"):
+            lines.append(f"简历摘要：{profile_snapshot['summary']}")
+        skills = profile_snapshot.get("skills") or []
         if skills:
             lines.append("技能关键词：" + "、".join(str(item) for item in skills[:10]))
-        experience = _safe_json_loads(profile.experience, [])
+        experience = profile_snapshot.get("experience") or []
         if experience:
             lines.append("经历亮点：" + "；".join(str(item) for item in experience[:4]))
-        profile_projects = _safe_json_loads(profile.projects, [])
+        profile_projects = profile_snapshot.get("projects") or []
         if profile_projects:
             lines.append("简历项目：" + "；".join(str(item) for item in profile_projects[:3]))
     return "\n".join(lines)[:2600]
@@ -112,8 +148,8 @@ def _knowledge_points_for_prompt(db: Session, interview: models.Interview, user_
 
 
 _QUESTION_NOISE_RE = re.compile(r"[\s\W_]+", re.UNICODE)
-MAIN_QUESTION_CATEGORIES = {"business_scenario", "project", "problem_solving", "behavioral"}
-QUESTION_MESSAGE_SOURCES = {"question_bank", "github_repo", "fallback"}
+MAIN_QUESTION_CATEGORIES = {"business_scenario", "project", "resume", "problem_solving", "behavioral"}
+QUESTION_MESSAGE_SOURCES = {"question_bank", "github_repo", "resume_profile", "fallback"}
 
 
 def _is_main_question_message(message: models.Message) -> bool:
@@ -185,6 +221,16 @@ def _with_forced_question(text: str, question: str, repo_name: str = "") -> str:
     if question.startswith("在你的项目"):
         return f"{text} {question}" if text else question
     prefix = f"接下来我想针对你的 GitHub 项目 {repo_name} 深挖一个具体问题：" if repo_name else "接下来我想针对你的 GitHub 项目深挖一个具体问题："
+    return f"{text} {prefix}{question}" if text else f"{prefix}{question}"
+
+
+def _with_forced_resume_question(text: str, question: str) -> str:
+    text = (text or "").strip()
+    if not question or question in text:
+        return text
+    if text and text[-1] not in "。！？!?":
+        text += "。"
+    prefix = "接下来我想针对你的简历深挖一个具体问题："
     return f"{text} {prefix}{question}" if text else f"{prefix}{question}"
 
 
@@ -311,9 +357,31 @@ def _repo_key_for_question(question_obj: dict) -> str:
     )
 
 
+def _is_resume_custom_question(question_obj: dict) -> bool:
+    if not isinstance(question_obj, dict):
+        return False
+    return (
+        str(question_obj.get("source") or "").strip() == "resume_profile"
+        or str(question_obj.get("category") or "").strip() == "resume"
+        or str(question_obj.get("section") or "").strip().startswith("简历")
+    )
+
+
+def _is_github_custom_question(question_obj: dict) -> bool:
+    if not isinstance(question_obj, dict) or _is_resume_custom_question(question_obj):
+        return False
+    return (
+        str(question_obj.get("source") or "").strip() == "github_repo"
+        or bool(str(question_obj.get("repo") or "").strip())
+        or "项目经历·" in str(question_obj.get("section") or "")
+    )
+
+
 def _repo_keys_for_custom_questions(custom_questions: list[dict]) -> list[str]:
     keys = []
     for question in custom_questions:
+        if not _is_github_custom_question(question):
+            continue
         key = _repo_key_for_question(question)
         if key not in keys:
             keys.append(key)
@@ -324,14 +392,21 @@ def _repo_round_count_for_custom_questions(custom_questions: list[dict]) -> int:
     return len(_repo_keys_for_custom_questions(custom_questions))
 
 
+def _resume_round_count_for_custom_questions(custom_questions: list[dict]) -> int:
+    return 1 if any(_is_resume_custom_question(question) for question in custom_questions) else 0
+
+
 def _effective_total_rounds(interview: models.Interview) -> int:
     base_rounds = interview.total_rounds or 6
-    return base_rounds + _repo_round_count_for_custom_questions(_custom_questions_for_interview(interview))
+    custom_questions = _custom_questions_for_interview(interview)
+    return base_rounds + _repo_round_count_for_custom_questions(custom_questions) + _resume_round_count_for_custom_questions(custom_questions)
 
 
 def _question_source(question_obj: dict, stage: str) -> str:
     if isinstance(question_obj, dict) and question_obj.get("source"):
         return str(question_obj["source"])
+    if stage == "resume" or _is_resume_custom_question(question_obj):
+        return "resume_profile"
     if isinstance(question_obj, dict) and question_obj.get("repo"):
         return "github_repo"
     if stage == "project" and isinstance(question_obj, dict) and "项目经历·" in str(question_obj.get("section", "")):
@@ -424,6 +499,10 @@ def _fallback_question_for_stage(stage: str, ai_msgs: list) -> dict:
         "project": [
             "请选一个你最熟悉的项目模块，讲讲它的核心设计、权衡以及你后续会如何优化？",
             "围绕你做过的一个项目，说明一次具体的技术取舍以及最终效果。",
+        ],
+        "resume": [
+            "请结合你简历中最能代表岗位匹配度的一段经历，说明你的个人职责、技术选择和最终结果。",
+            "你简历里有哪些能力点是本岗位最需要的？请用一个具体经历证明它。",
         ],
         "problem_solving": [
             "请选一个你熟悉的核心技术点，讲清楚它的底层原理、适用场景和常见坑。",
@@ -536,16 +615,26 @@ async def analyze_repo_endpoint(data: schemas.RepoAnalyzeRequest, user_id: int =
 async def start_interview(data: schemas.InterviewStart, db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)):
     knowledge_points_json = json.dumps(data.knowledge_points) if data.knowledge_points else "[]"
 
-    # v3: 如果用户提供了 GitHub 项目链接，优先复用前端预分析摘要，再生成定制问题
+    # v3/v6: 如果用户提供了 GitHub 项目链接或简历资料，生成定制深挖题。
     repo_context_json = None
     custom_questions_json = None
+    all_custom_questions = []
+    resume_deepdive_rounds = 0
     repo_deepdive_rounds = 0
+
+    profile_snapshot = _profile_snapshot_for_interview(db, user_id)
+    if profile_snapshot:
+        resume_questions = await generate_resume_questions(data.role, profile_snapshot)
+        if resume_questions:
+            all_custom_questions.extend(resume_questions)
+            resume_deepdive_rounds = _resume_round_count_for_custom_questions(resume_questions)
+            print(f"[start_interview] generated {len(resume_questions)} resume deep-dive questions")
+
     repo_urls = (data.repo_urls or [])[:3]   # 最多 3 个
     if repo_urls:
         preview_summaries = data.repo_summaries or []
         print(f"[start_interview] preparing {len(repo_urls)} repos...")
         repo_summaries = []
-        all_custom_questions = []
         for url in repo_urls:
             if not url or not url.strip():
                 continue
@@ -564,10 +653,13 @@ async def start_interview(data: schemas.InterviewStart, db: Session = Depends(ge
 
         if repo_summaries:
             repo_context_json = json.dumps(repo_summaries, ensure_ascii=False)
-        if all_custom_questions:
-            custom_questions_json = json.dumps(all_custom_questions, ensure_ascii=False)
-            repo_deepdive_rounds = _repo_round_count_for_custom_questions(all_custom_questions)
-            print(f"[start_interview] generated {len(all_custom_questions)} custom questions total")
+        repo_deepdive_rounds = _repo_round_count_for_custom_questions(all_custom_questions)
+        if repo_deepdive_rounds:
+            print(f"[start_interview] generated {repo_deepdive_rounds} repo deep-dive rounds")
+
+    if all_custom_questions:
+        custom_questions_json = json.dumps(all_custom_questions, ensure_ascii=False)
+        print(f"[start_interview] generated {len(all_custom_questions)} custom questions total")
 
     new_interview = models.Interview(
         user_id=user_id,
@@ -584,9 +676,10 @@ async def start_interview(data: schemas.InterviewStart, db: Session = Depends(ge
     db.refresh(new_interview)
 
     # Round 0: Only Introduction request (First sentence, no questions yet)
-    profile_note = "我也会结合你在用户中心保存的简历资料来观察匹配度。" if _candidate_context_for_prompt(db, user_id) else ""
+    profile_note = "我也会结合你在用户中心保存的简历资料来观察匹配度。" if profile_snapshot else ""
+    resume_round_note = f"你已保存简历资料，我会额外增加 {resume_deepdive_rounds} 轮简历深挖。" if resume_deepdive_rounds else ""
     repo_round_note = f"你选择了 GitHub 项目深挖，我会额外增加 {repo_deepdive_rounds} 轮，每个项目 1 题。" if repo_deepdive_rounds else ""
-    greeting = f"你好，我是你的{data.role}面试官。很高兴见到你。本次常规面试共设定为 {data.total_rounds} 轮提问。{repo_round_note}{profile_note}在正式开始前，请先做一个简单的自我介绍。"
+    greeting = f"你好，我是你的{data.role}面试官。很高兴见到你。本次常规面试共设定为 {data.total_rounds} 轮提问。{resume_round_note}{repo_round_note}{profile_note}在正式开始前，请先做一个简单的自我介绍。"
     ai_msg = models.Message(
         interview_id=new_interview.id,
         sender="ai",
@@ -646,7 +739,10 @@ def get_evaluation(interview_id: int, db: Session = Depends(get_db), user_id: in
     if not eval_record:
         raise HTTPException(status_code=404, detail="Evaluation not found or unauthorized")
 
-    return schemas.EvaluationDetail(**_evaluation_payload(eval_record.interview, eval_record))
+    messages = db.query(models.Message).filter(
+        models.Message.interview_id == interview_id
+    ).order_by(models.Message.created_at.asc()).all()
+    return schemas.EvaluationDetail(**_evaluation_payload(eval_record.interview, eval_record, messages))
 
 @router.post("/polish")
 async def polish_transcription(data: dict, user_id: int = Depends(get_current_user_id)):
@@ -1078,8 +1174,10 @@ def _load_turn_context(interview_id: int, content: str, db: Session, user_id: in
 
     question_count = len(main_questions_asked)
     base_rounds = interview.total_rounds or 6
-    repo_rounds = _repo_round_count_for_custom_questions(_custom_questions_for_interview(interview))
-    n = base_rounds + repo_rounds
+    custom_questions = _custom_questions_for_interview(interview)
+    repo_rounds = _repo_round_count_for_custom_questions(custom_questions)
+    resume_rounds = _resume_round_count_for_custom_questions(custom_questions)
+    n = base_rounds + repo_rounds + resume_rounds
 
     return {
         "interview": interview,
@@ -1092,6 +1190,7 @@ def _load_turn_context(interview_id: int, content: str, db: Session, user_id: in
         "question_count": question_count,
         "base_rounds": base_rounds,
         "repo_rounds": repo_rounds,
+        "resume_rounds": resume_rounds,
         "n": n,
     }
 
@@ -1129,6 +1228,7 @@ def _plan_interview_turn(ctx: dict, db: Session, user_id: int) -> dict:
     question_count = ctx["question_count"]
     base_rounds = ctx["base_rounds"]
     repo_rounds = ctx["repo_rounds"]
+    resume_rounds = ctx["resume_rounds"]
     n = ctx["n"]
     skipped_or_boundary = _is_skip_or_boundary_answer(ctx["content"])
 
@@ -1137,15 +1237,20 @@ def _plan_interview_turn(ctx: dict, db: Session, user_id: int) -> dict:
     #   有 GitHub 深挖时：scenario → 每个项目 1 题 → problem_solving → behavioral
     #   无 GitHub 深挖时：scenario → problem_solving → behavioral
     custom_questions_list = _custom_questions_for_interview(interview)
-    has_custom = len(custom_questions_list) > 0
+    has_resume = _resume_round_count_for_custom_questions(custom_questions_list) > 0
+    has_repo = _repo_round_count_for_custom_questions(custom_questions_list) > 0
+    has_custom = has_resume or has_repo
     if has_custom:
         scenario_end = max(1, base_rounds // 3)
-        project_end = min(n, scenario_end + repo_rounds)
+        resume_end = min(n, scenario_end + resume_rounds)
+        project_end = min(n, resume_end + repo_rounds)
         remaining_regular_rounds = max(0, base_rounds - scenario_end)
         solving_rounds = max(1, remaining_regular_rounds // 2) if remaining_regular_rounds else 0
         solving_end = min(n, project_end + solving_rounds)
         if question_count < scenario_end:
             current_stage = "business_scenario"
+        elif question_count < resume_end:
+            current_stage = "resume"
         elif question_count < project_end:
             current_stage = "project"
         elif question_count < solving_end:
@@ -1168,9 +1273,27 @@ def _plan_interview_turn(ctx: dict, db: Session, user_id: int) -> dict:
     role_key = role_info["key"] if role_info else "java-backend"
     kp_list = json.loads(interview.knowledge_points) if interview.knowledge_points else []
 
-    if current_stage == "project" and has_custom:
+    if current_stage == "resume" and has_resume:
+        resume_questions = [
+            _with_question_identity(q, "resume")
+            for q in custom_questions_list
+            if _is_resume_custom_question(q)
+        ]
+        available_resume = [
+            q for q in resume_questions
+            if not _question_was_asked(q.get("question", ""), ai_msgs, q.get("question_id", ""))
+        ]
+        if available_resume:
+            target_q_obj = available_resume[0]
+        else:
+            target_q_obj = _select_unasked_question(role_key, "resume", interview.difficulty, kp_list, ai_msgs)
+    elif current_stage == "project" and has_repo:
         # 项目深挖题走强制队列：按生成顺序挑第一道未问过的，避免面试官模型跳过 GitHub 内容。
-        custom_questions_list = [_with_question_identity(q, "project") for q in custom_questions_list]
+        custom_questions_list = [
+            _with_question_identity(q, "project")
+            for q in custom_questions_list
+            if _is_github_custom_question(q)
+        ]
         asked_repo_keys = {
             _repo_key_for_question(q)
             for q in custom_questions_list
@@ -1205,9 +1328,11 @@ def _plan_interview_turn(ctx: dict, db: Session, user_id: int) -> dict:
         force_next = "【系统指令：强制切换】候选人已表达不会、跳过或指出问题重复。必须结束当前问题，不要重复追问同一个知识点，直接进入下一题。"
     elif follow_up_limit_reached:
         force_next = "【系统指令：追问上限】当前主题目的追问次数已到上限。请自然总结候选人刚才的回答，然后进入下一题；不要继续围绕同一个知识点追问。"
-    if current_stage == "project" and has_custom and not skipped_or_boundary:
+    if current_stage == "project" and has_repo and not skipped_or_boundary:
         repo_name = target_q_obj.get("repo", "")
         force_next = f"【系统指令：GitHub 项目深挖】必须结束当前话题并切换到项目深挖。下一题必须围绕候选人的 GitHub 仓库{repo_name}，并且必须用清晰句式自然问出：{target_q_obj.get('question', '')}"
+    if current_stage == "resume" and has_resume and not skipped_or_boundary:
+        force_next = f"【系统指令：简历深挖】必须结束当前话题并切换到简历深挖。下一题必须明确引用候选人简历中的具体信息，并且必须用清晰句式自然问出：{target_q_obj.get('question', '')}"
 
     # Check if this is the absolute last round
     is_final_move = False
@@ -1225,6 +1350,8 @@ def _plan_interview_turn(ctx: dict, db: Session, user_id: int) -> dict:
     return {
         "current_stage": current_stage,
         "has_custom": has_custom,
+        "has_repo": has_repo,
+        "has_resume": has_resume,
         "target_q_obj": target_q_obj,
         "history_str": history_str,
         "last_main_q": last_main_q,
@@ -1247,7 +1374,14 @@ def _postprocess_llm_resp(llm_resp: dict, plan: dict, ai_msgs: list) -> dict:
         llm_resp["text"] = _normalize_closing_text(llm_resp.get("text", ""))
         return llm_resp
 
-    if plan["current_stage"] == "project" and plan["has_custom"]:
+    if plan["current_stage"] == "resume" and plan.get("has_resume"):
+        llm_resp["action"] = "MOVE_NEXT"
+        llm_resp["text"] = _with_forced_resume_question(
+            llm_resp.get("text", ""),
+            plan["target_next_text"],
+        )
+
+    if plan["current_stage"] == "project" and plan.get("has_repo"):
         llm_resp["action"] = "MOVE_NEXT"
         llm_resp["text"] = _with_forced_question(
             llm_resp.get("text", ""),
@@ -1359,6 +1493,9 @@ async def _build_and_store_evaluation(interview_id: int, db: Session) -> dict | 
         models.Evaluation.interview_id == interview_id
     ).first()
     if existing_eval:
+        messages = db.query(models.Message).filter(
+            models.Message.interview_id == interview_id
+        ).order_by(models.Message.created_at.asc()).all()
         if interview.status != "completed":
             interview.status = "completed"
             interview.end_time = interview.end_time or datetime.utcnow()
@@ -1366,7 +1503,7 @@ async def _build_and_store_evaluation(interview_id: int, db: Session) -> dict | 
             db.refresh(existing_eval)
         return {
             "message": "Interview already evaluated.",
-            "evaluation": _evaluation_payload(interview, existing_eval),
+            "evaluation": _evaluation_payload(interview, existing_eval, messages),
         }
 
     # 1. Gather all messages for evaluation
@@ -1467,6 +1604,16 @@ async def _build_and_store_evaluation(interview_id: int, db: Session) -> dict | 
     except Exception as e:
         print(f"[end_interview] study_plan failed (non-fatal): {type(e).__name__}: {e}")
 
+    # 2.6 简历匹配度分析
+    # 将“简历是否被回答支撑”显式写进报告，避免简历资料只停留在提问 prompt 中。
+    try:
+        profile_snapshot = _profile_snapshot_for_interview(db, interview.user_id)
+        resume_match = await generate_resume_match_report(interview.role, profile_snapshot, messages)
+        if resume_match:
+            evaluation_data["resume_match"] = resume_match
+    except Exception as e:
+        print(f"[end_interview] resume_match failed (non-fatal): {type(e).__name__}: {e}")
+
     # 3. Save Evaluation to DB（upsert：已有则更新，避免重复结束面试时报 IntegrityError）
     eval_record = db.query(models.Evaluation).filter(
         models.Evaluation.interview_id == interview_id
@@ -1558,11 +1705,14 @@ def get_evaluation_status(interview_id: int, db: Session = Depends(get_db), user
 
     eval_record = db.query(models.Evaluation).filter(models.Evaluation.interview_id == interview_id).first()
     if eval_record:
+        messages = db.query(models.Message).filter(
+            models.Message.interview_id == interview_id
+        ).order_by(models.Message.created_at.asc()).all()
         return {
             "interview_id": interview_id,
             "status": "completed",
             "retryable": False,
-            "evaluation": _evaluation_payload(interview, eval_record),
+            "evaluation": _evaluation_payload(interview, eval_record, messages),
         }
 
     status = interview.status or "in_progress"
@@ -1589,6 +1739,9 @@ async def end_interview(
         models.Evaluation.interview_id == interview_id
     ).first()
     if existing_eval:
+        messages = db.query(models.Message).filter(
+            models.Message.interview_id == interview_id
+        ).order_by(models.Message.created_at.asc()).all()
         if interview.status != "completed":
             interview.status = "completed"
             interview.end_time = interview.end_time or datetime.utcnow()
@@ -1597,7 +1750,7 @@ async def end_interview(
         return {
             "message": "Interview already evaluated.",
             "status": "completed",
-            "evaluation": _evaluation_payload(interview, existing_eval),
+            "evaluation": _evaluation_payload(interview, existing_eval, messages),
         }
 
     if interview.status == "evaluating":

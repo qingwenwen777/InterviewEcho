@@ -98,6 +98,10 @@ class EvaluationDetail(BaseModel):
     clarity_score: Optional[float] = 0.0
     confidence_score: Optional[float] = 0.0
     expression_metrics: Optional[dict] = None 
+    # —— 每轮回答复盘 ——
+    round_reviews: Optional[List[dict]] = None
+    # —— 简历深挖与匹配度 ——
+    resume_match: Optional[dict] = None
     # —— v3: GitHub 项目深挖（列表） ——
     repo_context: Optional[List[dict]] = None      
     custom_questions: Optional[List[dict]] = None   
