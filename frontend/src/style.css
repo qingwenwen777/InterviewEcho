@@ -6641,6 +6641,49 @@ strong {
   line-height: 1.6;
 }
 
+.deep-round-control {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(260px, 0.85fr);
+  gap: 16px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 253, 247, 0.62);
+}
+
+.deep-round-control div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.deep-round-control span {
+  color: #171716;
+  font-size: 14px;
+  font-weight: 520;
+}
+
+.deep-round-control small {
+  color: #777973;
+  font-size: 12px;
+}
+
+.settings-modal .compact-segmented {
+  gap: 6px;
+}
+
+.settings-modal .compact-segmented button {
+  min-height: 36px;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+
+.github-round-control {
+  margin-bottom: 4px;
+  background: #f1efe7;
+}
+
 .saved-project-chip {
   display: inline-flex;
   max-width: 100%;
@@ -6704,6 +6747,10 @@ strong {
 
   .profile-project-input {
     border-radius: 18px;
+  }
+
+  .deep-round-control {
+    grid-template-columns: 1fr;
   }
 }
 

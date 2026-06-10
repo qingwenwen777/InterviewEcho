@@ -22,8 +22,10 @@ class InterviewStart(BaseModel):
     difficulty: Optional[str] = "medium"
     knowledge_points: Optional[List[str]] = []
     total_rounds: Optional[int] = 5
+    resume_deepdive_rounds: Optional[int] = 1
     repo_urls: Optional[List[str]] = []   # v3: GitHub 项目深挖（可选，≤3 个）
     repo_summaries: Optional[List[dict]] = []  # 前端预分析结果，开始面试时优先复用
+    repo_rounds_per_project: Optional[int] = 1
 
 
 class RepoAnalyzeRequest(BaseModel):

@@ -347,7 +347,32 @@ def _custom_questions_for_interview(interview: models.Interview) -> list[dict]:
         return []
 
 
+MAX_RESUME_DEEPDIVE_ROUNDS = 2
+MAX_REPO_ROUNDS_PER_PROJECT = 2
+
+
+def _bounded_deepdive_rounds(value, default: int = 0, max_value: int = 2) -> int:
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        count = default
+    return max(0, min(max_value, count))
+
+
 def _repo_key_for_question(question_obj: dict) -> str:
+    if not isinstance(question_obj, dict):
+        return "__github_repo__"
+    round_key = str(question_obj.get("repo_round_key") or "").strip()
+    if round_key:
+        return round_key
+    return (
+        str(question_obj.get("repo") or "").strip()
+        or str(question_obj.get("section") or "").strip()
+        or "__github_repo__"
+    )
+
+
+def _repo_group_key_for_question(question_obj: dict) -> str:
     if not isinstance(question_obj, dict):
         return "__github_repo__"
     return (
@@ -393,7 +418,66 @@ def _repo_round_count_for_custom_questions(custom_questions: list[dict]) -> int:
 
 
 def _resume_round_count_for_custom_questions(custom_questions: list[dict]) -> int:
-    return 1 if any(_is_resume_custom_question(question) for question in custom_questions) else 0
+    resume_questions = [question for question in custom_questions if _is_resume_custom_question(question)]
+    if not resume_questions:
+        return 0
+    explicit_round_keys = []
+    for question in resume_questions:
+        key = str(question.get("resume_round_key") or "").strip()
+        if key and key not in explicit_round_keys:
+            explicit_round_keys.append(key)
+    return len(explicit_round_keys) if explicit_round_keys else 1
+
+
+def _select_resume_questions_for_rounds(questions: list[dict], requested_rounds: int) -> list[dict]:
+    limit = _bounded_deepdive_rounds(requested_rounds, 0, MAX_RESUME_DEEPDIVE_ROUNDS)
+    selected = []
+    seen_texts = set()
+    for question in questions if isinstance(questions, list) else []:
+        if not _is_resume_custom_question(question):
+            continue
+        question_text = str(question.get("question") or "").strip()
+        if not question_text or question_text in seen_texts:
+            continue
+        next_question = dict(question)
+        next_question["resume_round_key"] = f"resume:round:{len(selected) + 1}"
+        next_question.setdefault("source", "resume_profile")
+        selected.append(next_question)
+        seen_texts.add(question_text)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def _select_repo_questions_for_rounds(questions: list[dict], rounds_per_project: int) -> list[dict]:
+    limit = _bounded_deepdive_rounds(rounds_per_project, 0, MAX_REPO_ROUNDS_PER_PROJECT)
+    if limit <= 0:
+        return []
+
+    selected = []
+    counts_by_repo = {}
+    seen_texts_by_repo = {}
+    for question in questions if isinstance(questions, list) else []:
+        if not _is_github_custom_question(question):
+            continue
+        repo_key = _repo_group_key_for_question(question)
+        current_count = counts_by_repo.get(repo_key, 0)
+        if current_count >= limit:
+            continue
+        question_text = str(question.get("question") or "").strip()
+        if not question_text:
+            continue
+        seen_texts = seen_texts_by_repo.setdefault(repo_key, set())
+        if question_text in seen_texts:
+            continue
+
+        next_question = dict(question)
+        next_question["repo_round_key"] = f"{repo_key}:round:{current_count + 1}"
+        next_question.setdefault("source", "github_repo")
+        selected.append(next_question)
+        seen_texts.add(question_text)
+        counts_by_repo[repo_key] = current_count + 1
+    return selected
 
 
 def _effective_total_rounds(interview: models.Interview) -> int:
@@ -488,6 +572,86 @@ def _with_repo_project_context(question_obj: dict) -> dict:
     if question_text and repo_name and "你的项目" not in question_text and repo_name not in question_text:
         question_copy["question"] = f"在你的项目“{repo_name}”中，{question_text}"
     return question_copy
+
+
+def _fallback_resume_deepdive_questions(role: str, profile_snapshot: dict) -> list[dict]:
+    if not isinstance(profile_snapshot, dict):
+        return []
+    anchors = []
+    for key in ("projects", "experience", "skills", "education"):
+        value = profile_snapshot.get(key)
+        if isinstance(value, list):
+            anchors.extend(str(item).strip() for item in value if str(item).strip())
+        elif isinstance(value, str) and value.strip():
+            anchors.append(value.strip())
+    anchors = anchors or ["你的简历经历", "你的核心能力"]
+
+    first_anchor = anchors[0]
+    second_anchor = next((item for item in anchors[1:] if item != first_anchor), "你的核心能力")
+    questions = [
+        {
+            "question": (
+                f"我看到你简历里提到“{first_anchor}”。请结合一个具体场景说明："
+                "你当时负责的部分是什么，关键技术或方案选择是什么，遇到的困难如何解决，最后有什么结果或复盘？"
+            ),
+            "expected_points": ["简历事实对应的真实背景", "个人职责边界", "关键技术决策与取舍", "结果、指标或复盘"],
+            "tech_focus": "简历经历真实性与岗位匹配度",
+        },
+        {
+            "question": (
+                f"围绕你简历中的“{second_anchor}”，请说明它和「{role}」岗位的匹配点，"
+                "以及你在项目或学习中真正落地到什么程度？"
+            ),
+            "expected_points": ["岗位匹配度", "落地场景", "掌握深度", "不足与改进"],
+            "tech_focus": "岗位匹配度与能力边界",
+        },
+    ]
+    for question in questions:
+        question.update(
+            {
+                "source": "resume_profile",
+                "category": "resume",
+                "difficulty": "medium",
+                "section": "简历深挖",
+                "key_points": question["expected_points"],
+            }
+        )
+    return questions
+
+
+def _fallback_repo_deepdive_questions(role: str, repo_summary: dict) -> list[dict]:
+    if not isinstance(repo_summary, dict):
+        return []
+    repo_full_name = str(repo_summary.get("full_name") or repo_summary.get("name") or "GitHub 项目").strip()
+    repo_name = str(repo_summary.get("name") or repo_full_name.split("/")[-1] or "GitHub 项目").strip()
+    languages = repo_summary.get("languages") if isinstance(repo_summary.get("languages"), dict) else {}
+    language_hint = repo_summary.get("main_language") or next(iter(languages.keys()), "")
+    tech_keywords = repo_summary.get("tech_keywords") if isinstance(repo_summary.get("tech_keywords"), list) else []
+    tech_hint = "、".join(str(item) for item in ([language_hint] + tech_keywords) if item)[:80] or "核心技术栈"
+    questions = [
+        {
+            "question": f"请结合 {tech_hint}，说明你在这个项目里负责的核心模块是什么，为什么这样设计？",
+            "expected_points": ["个人负责范围", "核心模块设计", "技术选型依据", "结果或验证方式"],
+            "tech_focus": "项目职责与架构取舍",
+        },
+        {
+            "question": "如果这个项目的访问量或数据规模增长一倍，你会优先排查和优化哪条链路？请说明判断依据。",
+            "expected_points": ["瓶颈判断", "监控指标", "优化优先级", "风险与回滚"],
+            "tech_focus": "项目可扩展性与故障排查",
+        },
+    ]
+    for question in questions:
+        question.update(
+            {
+                "source": "github_repo",
+                "repo": repo_full_name,
+                "category": "project",
+                "difficulty": "medium",
+                "section": f"项目经历·{repo_name}",
+                "key_points": question["expected_points"],
+            }
+        )
+    return questions
 
 
 def _fallback_question_for_stage(stage: str, ai_msgs: list) -> dict:
@@ -621,17 +785,29 @@ async def start_interview(data: schemas.InterviewStart, db: Session = Depends(ge
     all_custom_questions = []
     resume_deepdive_rounds = 0
     repo_deepdive_rounds = 0
+    requested_resume_rounds = _bounded_deepdive_rounds(
+        data.resume_deepdive_rounds,
+        1,
+        MAX_RESUME_DEEPDIVE_ROUNDS,
+    )
+    repo_rounds_per_project = _bounded_deepdive_rounds(
+        data.repo_rounds_per_project,
+        1,
+        MAX_REPO_ROUNDS_PER_PROJECT,
+    )
 
     profile_snapshot = _profile_snapshot_for_interview(db, user_id)
-    if profile_snapshot:
+    if profile_snapshot and requested_resume_rounds:
         resume_questions = await generate_resume_questions(data.role, profile_snapshot)
-        if resume_questions:
-            all_custom_questions.extend(resume_questions)
-            resume_deepdive_rounds = _resume_round_count_for_custom_questions(resume_questions)
-            print(f"[start_interview] generated {len(resume_questions)} resume deep-dive questions")
+        resume_questions = [*resume_questions, *_fallback_resume_deepdive_questions(data.role, profile_snapshot)]
+        selected_resume_questions = _select_resume_questions_for_rounds(resume_questions, requested_resume_rounds)
+        if selected_resume_questions:
+            all_custom_questions.extend(selected_resume_questions)
+            resume_deepdive_rounds = _resume_round_count_for_custom_questions(selected_resume_questions)
+            print(f"[start_interview] selected {resume_deepdive_rounds} resume deep-dive rounds")
 
     repo_urls = (data.repo_urls or [])[:3]   # 最多 3 个
-    if repo_urls:
+    if repo_urls and repo_rounds_per_project:
         preview_summaries = data.repo_summaries or []
         print(f"[start_interview] preparing {len(repo_urls)} repos...")
         repo_summaries = []
@@ -649,7 +825,9 @@ async def start_interview(data: schemas.InterviewStart, db: Session = Depends(ge
             repo_summaries.append(summary)
             # 为每个 repo 生成 3-5 个定制问题
             questions = await generate_repo_questions(data.role, summary)
-            all_custom_questions.extend(questions)
+            questions = [*questions, *_fallback_repo_deepdive_questions(data.role, summary)]
+            selected_questions = _select_repo_questions_for_rounds(questions, repo_rounds_per_project)
+            all_custom_questions.extend(selected_questions)
 
         if repo_summaries:
             repo_context_json = json.dumps(repo_summaries, ensure_ascii=False)
@@ -678,7 +856,8 @@ async def start_interview(data: schemas.InterviewStart, db: Session = Depends(ge
     # Round 0: Only Introduction request (First sentence, no questions yet)
     profile_note = "我也会结合你在用户中心保存的简历资料来观察匹配度。" if profile_snapshot else ""
     resume_round_note = f"你已保存简历资料，我会额外增加 {resume_deepdive_rounds} 轮简历深挖。" if resume_deepdive_rounds else ""
-    repo_round_note = f"你选择了 GitHub 项目深挖，我会额外增加 {repo_deepdive_rounds} 轮，每个项目 1 题。" if repo_deepdive_rounds else ""
+    repo_round_label = f"每个项目 {repo_rounds_per_project} 题"
+    repo_round_note = f"你选择了 GitHub 项目深挖，我会额外增加 {repo_deepdive_rounds} 轮，{repo_round_label}。" if repo_deepdive_rounds else ""
     greeting = f"你好，我是你的{data.role}面试官。很高兴见到你。本次常规面试共设定为 {data.total_rounds} 轮提问。{resume_round_note}{repo_round_note}{profile_note}在正式开始前，请先做一个简单的自我介绍。"
     ai_msg = models.Message(
         interview_id=new_interview.id,

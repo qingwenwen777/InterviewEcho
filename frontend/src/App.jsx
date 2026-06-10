@@ -90,6 +90,16 @@ const FALLBACK_ROLES = [
 ]
 
 const DIFFICULTIES = ['简单', '中等', '困难']
+const RESUME_DEEPDIVE_ROUND_OPTIONS = [
+  { value: 0, label: '不问' },
+  { value: 1, label: '1 轮' },
+  { value: 2, label: '2 轮' },
+]
+const REPO_ROUNDS_PER_PROJECT_OPTIONS = [
+  { value: 0, label: '不问' },
+  { value: 1, label: '每项 1 轮' },
+  { value: 2, label: '每项 2 轮' },
+]
 const CODE_LANGUAGE_OPTIONS = [
   { value: 'python', label: 'Python' },
   { value: 'java', label: 'Java' },
@@ -1218,6 +1228,8 @@ function StartSettingsModal({ role, open, sectionState, onClose, onConfirm }) {
   const [profileLibrary, setProfileLibrary] = useState({ profile: null, projects: [] })
   const [profileLoading, setProfileLoading] = useState(false)
   const [selectedSavedProjectIds, setSelectedSavedProjectIds] = useState([])
+  const [resumeDeepdiveRounds, setResumeDeepdiveRounds] = useState(1)
+  const [repoRoundsPerProject, setRepoRoundsPerProject] = useState(1)
   const sections = sectionState?.items || []
   const loadingSections = Boolean(open && role?.key && (!sectionState || sectionState.status === 'loading'))
 
@@ -1229,6 +1241,8 @@ function StartSettingsModal({ role, open, sectionState, onClose, onConfirm }) {
     setRepoSlots([{ url: '', analyzing: false, summary: null, error: '' }])
     setRepoExpanded(false)
     setSelectedSavedProjectIds([])
+    setResumeDeepdiveRounds(1)
+    setRepoRoundsPerProject(1)
   }, [open, role])
 
   useEffect(() => {
@@ -1260,15 +1274,31 @@ function StartSettingsModal({ role, open, sectionState, onClose, onConfirm }) {
   const profile = profileLibrary.profile || {}
   const hasSavedResume = Boolean((profile.resume_summary || profile.resume_text || '').trim())
   const selectedRepoCount = selectedSavedProjectIds.length + repoSlots.filter((slot) => slot.url.trim() && !slot.error).length
+  const resumeDeepdiveRoundCount = hasSavedResume ? Number(resumeDeepdiveRounds) : 0
+  const repoRoundsPerProjectCount = selectedRepoCount ? Number(repoRoundsPerProject) : 0
+  const repoDeepdiveRoundCount = selectedRepoCount * repoRoundsPerProjectCount
+  const totalPlannedRounds = Number(rounds) + resumeDeepdiveRoundCount + repoDeepdiveRoundCount
   const selectedSectionText = loadingSections
     ? '正在准备'
     : selectedSections.length
       ? `已选 ${selectedSections.length} 项`
       : '默认完整流程'
-  const roundText = selectedRepoCount
-    ? `${rounds} 常规轮 + ${selectedRepoCount} 项目轮`
+  const extraRoundParts = [
+    resumeDeepdiveRoundCount ? `${resumeDeepdiveRoundCount} 简历轮` : '',
+    repoDeepdiveRoundCount ? `${repoDeepdiveRoundCount} 项目轮` : '',
+  ].filter(Boolean)
+  const roundText = extraRoundParts.length
+    ? `${rounds} 常规轮 + ${extraRoundParts.join(' + ')}`
     : `${rounds} 轮 · ${roundsTone(rounds)}`
-  const repoRoundHint = selectedRepoCount ? `项目深挖将额外增加 ${selectedRepoCount} 轮，每个项目 1 题。` : ''
+  const extraRoundHintParts = [
+    resumeDeepdiveRoundCount ? `简历深挖额外 ${resumeDeepdiveRoundCount} 轮` : '',
+    repoDeepdiveRoundCount
+      ? `项目深挖额外 ${repoDeepdiveRoundCount} 轮，每个项目 ${repoRoundsPerProjectCount} 题`
+      : '',
+  ].filter(Boolean)
+  const extraRoundHint = extraRoundHintParts.length
+    ? `预计共 ${totalPlannedRounds} 轮；${extraRoundHintParts.join('；')}。`
+    : ''
   const roundProgress = `${Math.min(100, Math.max(0, ((Number(rounds) - 2) / 8) * 100))}%`
 
   if (!open || !role) return null
@@ -1310,15 +1340,19 @@ function StartSettingsModal({ role, open, sectionState, onClose, onConfirm }) {
       ...selectedSavedProjects.map((project) => ({ url: project.url, summary: project.summary || null })),
       ...selectedRepoSlots.map((slot) => ({ url: slot.url.trim(), summary: slot.summary })),
     ].slice(0, 3)
-    const repo_urls = repoEntries.map((entry) => entry.url)
-    const repo_summaries = repoEntries.map((entry) => entry.summary).filter(Boolean)
+    const repo_urls = repoRoundsPerProjectCount ? repoEntries.map((entry) => entry.url) : []
+    const repo_summaries = repoRoundsPerProjectCount
+      ? repoEntries.map((entry) => entry.summary).filter(Boolean)
+      : []
 
     onConfirm({
       difficulty,
       total_rounds: Number(rounds),
+      resume_deepdive_rounds: resumeDeepdiveRoundCount,
       knowledge_points: selectedSections,
       repo_urls,
       repo_summaries,
+      repo_rounds_per_project: repoRoundsPerProjectCount,
     })
     onClose()
   }
@@ -1374,7 +1408,7 @@ function StartSettingsModal({ role, open, sectionState, onClose, onConfirm }) {
                 <span>标准</span>
                 <span>深</span>
               </div>
-              {repoRoundHint && <div className="muted-row">{repoRoundHint}</div>}
+              {extraRoundHint && <div className="muted-row">{extraRoundHint}</div>}
             </section>
           </div>
 
@@ -1451,10 +1485,30 @@ function StartSettingsModal({ role, open, sectionState, onClose, onConfirm }) {
             </div>
             <div className="candidate-library">
               {hasSavedResume ? (
-                <div className="candidate-resume-snapshot">
-                  <FileText size={17} />
-                  <p>{profile.resume_summary || '已保存简历文本，面试官会在自我介绍与项目题中自然参考。'}</p>
-                </div>
+                <>
+                  <div className="candidate-resume-snapshot">
+                    <FileText size={17} />
+                    <p>{profile.resume_summary || '已保存简历文本，面试官会在自我介绍与项目题中自然参考。'}</p>
+                  </div>
+                  <div className="deep-round-control">
+                    <div>
+                      <span>简历深挖</span>
+                      <small>{resumeDeepdiveRoundCount ? `额外 ${resumeDeepdiveRoundCount} 轮` : '不额外提问'}</small>
+                    </div>
+                    <div className="segmented three compact-segmented">
+                      {RESUME_DEEPDIVE_ROUND_OPTIONS.map((item) => (
+                        <button
+                          type="button"
+                          key={item.value}
+                          className={resumeDeepdiveRounds === item.value ? 'active' : ''}
+                          onClick={() => setResumeDeepdiveRounds(item.value)}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
               ) : (
                 <div className="muted-row">可在用户中心上传 PDF 或粘贴简历，之后会自动带入面试上下文。</div>
               )}
@@ -1495,13 +1549,33 @@ function StartSettingsModal({ role, open, sectionState, onClose, onConfirm }) {
                 <em>（可选）</em>
               </span>
               <span className="github-toggle-meta">
-                {selectedRepoCount ? `已添加 ${selectedRepoCount} 个 · 额外 ${selectedRepoCount} 轮` : '展开添加'}
+                {selectedRepoCount
+                  ? `已添加 ${selectedRepoCount} 个 · ${repoDeepdiveRoundCount ? `额外 ${repoDeepdiveRoundCount} 轮` : '不额外提问'}`
+                  : '展开添加'}
                 <ChevronDown size={18} />
               </span>
             </button>
 
             {repoExpanded && (
               <div className="repo-list github-repo-panel">
+                <div className="deep-round-control github-round-control">
+                  <div>
+                    <span>项目深挖</span>
+                    <small>{repoDeepdiveRoundCount ? `额外 ${repoDeepdiveRoundCount} 轮` : '不额外提问'}</small>
+                  </div>
+                  <div className="segmented three compact-segmented repo-round-segmented">
+                    {REPO_ROUNDS_PER_PROJECT_OPTIONS.map((item) => (
+                      <button
+                        type="button"
+                        key={item.value}
+                        className={repoRoundsPerProject === item.value ? 'active' : ''}
+                        onClick={() => setRepoRoundsPerProject(item.value)}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 {repoSlots.map((slot, index) => (
                   <div className="repo-slot" key={index}>
                     <div className="repo-input-line">

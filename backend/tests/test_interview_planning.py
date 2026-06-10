@@ -32,6 +32,9 @@ def _ctx(interview_obj, ai_msgs, main_questions, question_count, content="answer
         "repo_rounds": interview._repo_round_count_for_custom_questions(
             interview._custom_questions_for_interview(interview_obj)
         ),
+        "resume_rounds": interview._resume_round_count_for_custom_questions(
+            interview._custom_questions_for_interview(interview_obj)
+        ),
         "n": interview._effective_total_rounds(interview_obj),
         "content": content,
     }
@@ -141,6 +144,85 @@ def test_follow_up_limit_uses_llm_path_and_current_question_points():
     assert plan["target_next_text"] != question["question"]
 
 
+def test_configured_project_round_keys_allow_multiple_questions_per_repo():
+    _patch_candidate_context()
+    custom_questions = [
+        {
+            "question": "First repo deep dive?",
+            "expected_points": ["ownership"],
+            "repo": "owner/Golive",
+            "source": "github_repo",
+            "section": "项目经历·Golive",
+            "repo_round_key": "owner/Golive:round:1",
+        },
+        {
+            "question": "Second repo deep dive?",
+            "expected_points": ["tradeoff"],
+            "repo": "owner/Golive",
+            "source": "github_repo",
+            "section": "项目经历·Golive",
+            "repo_round_key": "owner/Golive:round:2",
+        },
+    ]
+    interview_obj = SimpleNamespace(
+        role="Web前端开发工程师",
+        difficulty="中等",
+        knowledge_points="[]",
+        total_rounds=1,
+        custom_questions=json.dumps(custom_questions, ensure_ascii=False),
+    )
+    intro = Msg(sender="ai", category="introduction", content="intro")
+    scenario = Msg(sender="ai", category="business_scenario", content="scenario", action="MOVE_NEXT")
+
+    assert interview._repo_round_count_for_custom_questions(custom_questions) == 2
+    assert interview._effective_total_rounds(interview_obj) == 3
+
+    first_project_plan = interview._plan_interview_turn(
+        _ctx(interview_obj, [intro, scenario], [scenario], 1),
+        None,
+        1,
+    )
+    assert first_project_plan["current_stage"] == "project"
+    assert first_project_plan["target_q_obj"]["question"] == "在你的项目“Golive”中，First repo deep dive?"
+
+    project_one = Msg(
+        sender="ai",
+        category="project",
+        content=first_project_plan["target_q_obj"]["question"],
+        action="MOVE_NEXT",
+        source="github_repo",
+        question_id=first_project_plan["target_q_obj"]["question_id"],
+        round_index=2,
+    )
+    second_project_plan = interview._plan_interview_turn(
+        _ctx(interview_obj, [intro, scenario, project_one], [scenario, project_one], 2),
+        None,
+        1,
+    )
+    assert second_project_plan["current_stage"] == "project"
+    assert second_project_plan["target_q_obj"]["question"] == "在你的项目“Golive”中，Second repo deep dive?"
+
+
+def test_resume_round_keys_count_requested_resume_rounds():
+    resume_questions = [
+        {
+            "question": "Resume deep dive 1?",
+            "source": "resume_profile",
+            "category": "resume",
+            "resume_round_key": "resume:round:1",
+        },
+        {
+            "question": "Resume deep dive 2?",
+            "source": "resume_profile",
+            "category": "resume",
+            "resume_round_key": "resume:round:2",
+        },
+    ]
+
+    assert interview._resume_round_count_for_custom_questions(resume_questions) == 2
+    assert interview._resume_round_count_for_custom_questions([{**resume_questions[0], "resume_round_key": ""}]) == 1
+
+
 def test_final_round_uses_natural_closing_plan():
     _patch_candidate_context()
     interview_obj = SimpleNamespace(
@@ -193,6 +275,8 @@ def test_structured_message_fields_drive_round_classification():
 if __name__ == "__main__":
     test_repo_deepdive_adds_extra_rounds_and_asks_one_question_per_repo()
     test_follow_up_limit_uses_llm_path_and_current_question_points()
+    test_configured_project_round_keys_allow_multiple_questions_per_repo()
+    test_resume_round_keys_count_requested_resume_rounds()
     test_final_round_uses_natural_closing_plan()
     test_final_postprocess_marks_close_and_keeps_end_marker()
     test_closing_message_has_explicit_marker()
