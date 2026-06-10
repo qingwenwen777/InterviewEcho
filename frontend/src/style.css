@@ -598,6 +598,18 @@ button.user-chip:hover {
   color: white;
 }
 
+.button.ghost.danger-soft {
+  border-color: rgba(188, 73, 64, 0.28);
+  background: rgba(216, 92, 85, 0.08);
+  color: #9f3932;
+}
+
+.button.ghost.danger-soft:hover:not(:disabled) {
+  border-color: rgba(188, 73, 64, 0.42);
+  background: rgba(216, 92, 85, 0.13);
+  color: #822b25;
+}
+
 .button.small {
   min-height: 32px;
   padding: 6px 10px;

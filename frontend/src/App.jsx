@@ -60,6 +60,7 @@ import {
   Square,
   Sun,
   TimerReset,
+  Trash2,
   Trophy,
   UserRound,
   Volume2,
@@ -2266,6 +2267,7 @@ function AccountPage() {
   })
   const [profileLoading, setProfileLoading] = useState(true)
   const [resumeSaving, setResumeSaving] = useState(false)
+  const [resumeClearing, setResumeClearing] = useState(false)
   const [pdfUploading, setPdfUploading] = useState(false)
   const [projectUrl, setProjectUrl] = useState('')
   const [projectSaving, setProjectSaving] = useState(false)
@@ -2463,6 +2465,27 @@ function AccountPage() {
     }
   }
 
+  const clearResume = async () => {
+    if (!resumeReady) {
+      toast('当前没有可清除的简历资料。', 'info')
+      return
+    }
+    const confirmed = window.confirm('确定清除已保存的简历资料吗？AI 摘要、技能标签和简历正文都会被清空。')
+    if (!confirmed) return
+
+    setResumeClearing(true)
+    try {
+      const { data } = await api.delete('/profile/resume')
+      applyProfileResponse(data)
+      setResumeEditorOpen(false)
+      toast('简历资料已清除。', 'success')
+    } catch (error) {
+      toast(`清除简历失败：${getErrorMessage(error)}`, 'error')
+    } finally {
+      setResumeClearing(false)
+    }
+  }
+
   const addProfileProject = async () => {
     if (!projectUrl.trim()) {
       toast('请输入 GitHub 仓库地址。', 'warning')
@@ -2526,6 +2549,16 @@ function AccountPage() {
               <button className="button ghost small" onClick={() => pdfInputRef.current?.click()} disabled={pdfUploading}>
                 {pdfUploading ? '上传中' : '上传 PDF'}
               </button>
+              {resumeReady && (
+                <button
+                  className="button ghost danger-soft small"
+                  onClick={clearResume}
+                  disabled={resumeClearing || resumeSaving || pdfUploading}
+                >
+                  <Trash2 size={14} />
+                  {resumeClearing ? '清除中' : '清除'}
+                </button>
+              )}
             </div>
           </div>
 

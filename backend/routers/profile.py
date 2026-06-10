@@ -198,6 +198,33 @@ async def upload_resume_pdf(
     return {"profile": _profile_payload(profile), "projects": [_project_payload(project) for project in projects]}
 
 
+@router.delete("/resume", response_model=schemas.UserProfileResponse)
+def clear_resume(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
+    profile = db.query(models.UserProfile).filter(models.UserProfile.user_id == user_id).first()
+    if profile:
+        profile.resume_filename = ""
+        profile.resume_text = ""
+        profile.resume_summary = ""
+        profile.skills = _json_dumps([])
+        profile.education = _json_dumps([])
+        profile.experience = _json_dumps([])
+        profile.projects = _json_dumps([])
+        profile.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(profile)
+
+    projects = (
+        db.query(models.UserProject)
+        .filter(models.UserProject.user_id == user_id)
+        .order_by(models.UserProject.updated_at.desc(), models.UserProject.id.desc())
+        .all()
+    )
+    return {"profile": _profile_payload(profile), "projects": [_project_payload(project) for project in projects]}
+
+
 @router.post("/projects", response_model=schemas.UserProjectItem)
 async def add_project(
     data: schemas.UserProjectCreate,
