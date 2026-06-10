@@ -1,7 +1,7 @@
 import json
 
 from db import models
-from db.code_problem_bank import get_hot100_problems
+from db.code_problem_bank import get_code_problems
 
 
 def _dump(value):
@@ -9,8 +9,8 @@ def _dump(value):
 
 
 def seed_code_problems(db):
-    """Insert or refresh Hot100 ACM problem metadata and test cases."""
-    for order_index, item in enumerate(get_hot100_problems(), start=1):
+    """Insert or refresh Hot200 ACM problem metadata and test cases."""
+    for order_index, item in enumerate(get_code_problems(), start=1):
         problem = db.query(models.CodeProblem).filter(models.CodeProblem.id == item["id"]).first()
         fields = {
             "title": item["title"],
@@ -23,7 +23,7 @@ def seed_code_problems(db):
             "samples": _dump(item["samples"]),
             "constraints": _dump(item["constraints"]),
             "starter_code": _dump(item["starter_code"]),
-            "source": "Hot100",
+            "source": "Hot200",
             "is_active": True,
             "order_index": order_index,
         }

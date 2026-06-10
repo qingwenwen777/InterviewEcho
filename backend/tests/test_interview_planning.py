@@ -248,6 +248,50 @@ def test_final_round_uses_natural_closing_plan():
     assert "禁止再提出任何新问题" in plan["force_next"]
 
 
+def test_final_round_can_ask_one_follow_up_before_closing():
+    _patch_candidate_context()
+    interview_obj = SimpleNamespace(
+        role="Web前端开发工程师",
+        difficulty="中等",
+        knowledge_points="[]",
+        total_rounds=3,
+        custom_questions=None,
+    )
+    q1 = Msg(sender="ai", category="business_scenario", content="场景题", action="MOVE_NEXT", source="question_bank", round_index=1)
+    q2 = Msg(sender="ai", category="problem_solving", content="技术题", action="MOVE_NEXT", source="question_bank", round_index=2)
+    q3 = Msg(sender="ai", category="problem_solving", content="最后一题", action="MOVE_NEXT", source="question_bank", round_index=3)
+
+    plan = interview._plan_interview_turn(_ctx(interview_obj, [q1, q2, q3], [q1, q2, q3], 3), None, 1)
+
+    assert not plan["is_final_move"]
+    assert plan["is_final_budget_pending"]
+    assert plan["target_next_text"].startswith("【面试结束】")
+    assert "FOLLOW_UP" in plan["force_next"]
+
+
+def test_final_round_closes_after_follow_up_answer():
+    _patch_candidate_context()
+    interview_obj = SimpleNamespace(
+        role="Web前端开发工程师",
+        difficulty="中等",
+        knowledge_points="[]",
+        total_rounds=3,
+        custom_questions=None,
+    )
+    q1 = Msg(sender="ai", category="business_scenario", content="场景题", action="MOVE_NEXT", source="question_bank", round_index=1)
+    q2 = Msg(sender="ai", category="problem_solving", content="技术题", action="MOVE_NEXT", source="question_bank", round_index=2)
+    q3 = Msg(sender="ai", category="problem_solving", content="最后一题", action="MOVE_NEXT", source="question_bank", round_index=3)
+    follow = Msg(sender="ai", category="problem_solving_FOLLOW_UP", content="最后追问", action="FOLLOW_UP", source="llm_follow_up", round_index=3)
+    ctx = _ctx(interview_obj, [q1, q2, q3, follow], [q1, q2, q3], 3)
+    ctx["current_follow_up_count"] = 1
+
+    plan = interview._plan_interview_turn(ctx, None, 1)
+
+    assert plan["is_final_move"]
+    assert not plan["is_final_budget_pending"]
+    assert plan["target_next_text"].startswith("【面试结束】")
+
+
 def test_final_postprocess_marks_close_and_keeps_end_marker():
     plan = {"is_final_move": True, "current_stage": "behavioral", "has_custom": False}
     response = interview._postprocess_llm_resp(
@@ -257,7 +301,62 @@ def test_final_postprocess_marks_close_and_keeps_end_marker():
     )
 
     assert response["action"] == "CLOSE"
-    assert response["text"].startswith("【面试结束】")
+    assert response["text"] == interview._closing_message()
+
+
+def test_final_budget_postprocess_separates_follow_up_from_close():
+    plan = {
+        "is_final_move": False,
+        "is_final_budget_pending": True,
+        "current_stage": "behavioral",
+        "has_resume": False,
+        "has_repo": False,
+        "follow_up_limit_reached": False,
+        "target_next_text": interview._closing_message(),
+    }
+    follow = interview._postprocess_llm_resp(
+        {"action": "FOLLOW_UP", "text": "能否补充说明 !important 失效的场景？"},
+        dict(plan),
+        [],
+    )
+    close = interview._postprocess_llm_resp(
+        {"action": "MOVE_NEXT", "text": "【面试结束】这些情况你有了解吗？"},
+        dict(plan),
+        [],
+    )
+
+    assert follow["action"] == "FOLLOW_UP"
+    assert close["action"] == "CLOSE"
+    assert close["text"] == interview._closing_message()
+
+
+def test_follow_up_limit_is_hard_guard():
+    plan = {
+        "is_final_move": False,
+        "is_final_budget_pending": False,
+        "current_stage": "problem_solving",
+        "has_resume": False,
+        "has_repo": False,
+        "follow_up_limit_reached": True,
+        "target_next_text": "下一道题",
+    }
+    response = interview._postprocess_llm_resp(
+        {"action": "FOLLOW_UP", "text": "我再追问一个问题？"},
+        plan,
+        [],
+    )
+
+    assert response["action"] == "MOVE_NEXT"
+    assert "下一道题" in response["text"]
+
+
+def test_follow_up_category_uses_last_main_question_category():
+    plan = {
+        "current_stage": "behavioral",
+        "last_main_q": Msg(category="problem_solving"),
+    }
+
+    assert interview._follow_up_category_for_plan(plan) == "problem_solving_FOLLOW_UP"
 
 
 def test_closing_message_has_explicit_marker():
@@ -278,7 +377,12 @@ if __name__ == "__main__":
     test_configured_project_round_keys_allow_multiple_questions_per_repo()
     test_resume_round_keys_count_requested_resume_rounds()
     test_final_round_uses_natural_closing_plan()
+    test_final_round_can_ask_one_follow_up_before_closing()
+    test_final_round_closes_after_follow_up_answer()
     test_final_postprocess_marks_close_and_keeps_end_marker()
+    test_final_budget_postprocess_separates_follow_up_from_close()
+    test_follow_up_limit_is_hard_guard()
+    test_follow_up_category_uses_last_main_question_category()
     test_closing_message_has_explicit_marker()
     test_structured_message_fields_drive_round_classification()
     print("interview planning tests passed")

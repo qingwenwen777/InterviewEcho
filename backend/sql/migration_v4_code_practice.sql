@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS code_problems (
     samples TEXT NOT NULL,
     constraints TEXT NOT NULL,
     starter_code TEXT NOT NULL,
-    source VARCHAR(50) DEFAULT 'Hot100',
+    source VARCHAR(50) DEFAULT 'Hot200',
     is_active BOOLEAN DEFAULT TRUE,
     order_index INT DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

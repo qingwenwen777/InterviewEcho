@@ -240,18 +240,22 @@ def _first_question_message(question: str) -> str:
 
 def _is_skip_or_boundary_answer(content: str) -> bool:
     text = (content or "").strip().lower()
-    compact = "".join(text.split())
+    compact = re.sub(r"[\s，。！？、；;：:,\.!\?\"'“”‘’（）()【】\[\]{}<>《》~…-]+", "", text)
     if not compact:
         return False
-    phrases = [
+    exact_phrases = {
+        "过",
         "不会",
+        "不会了",
         "不知道",
+        "不知道了",
         "不清楚",
         "没听过",
         "不了解",
         "想不出来",
         "答不上来",
         "跳过",
+        "跳过吧",
         "下一个",
         "下一题",
         "过吧",
@@ -263,10 +267,37 @@ def _is_skip_or_boundary_answer(content: str) -> bool:
         "pass",
         "skip",
         "next",
-    ]
-    if any(phrase in compact for phrase in phrases):
+    }
+    if compact in exact_phrases:
         return True
-    return compact in {"过", "不会了", "不知道了"}
+
+    inability_subjects = (
+        "我",
+        "这题",
+        "这题我",
+        "这个",
+        "这个我",
+        "这个问题",
+        "这个问题我",
+        "这道题",
+        "这道题我",
+    )
+    subject_pattern = "|".join(inability_subjects)
+    inability_pattern = (
+        rf"^(?:{subject_pattern})?"
+        r"(?:真|实在|确实|暂时|有点)?"
+        r"(?:不会|不知道|不清楚|没听过|不了解|想不出来|答不上来)"
+        r"(?:了|啦|啊|呢|吧|怎么答|怎么回答|该怎么回答|从哪答起)?$"
+    )
+    if re.fullmatch(inability_pattern, compact):
+        return True
+
+    explicit_skip_patterns = [
+        r"^(?:先)?(?:跳过|下一个|下一题|换一个|别问了|pass|skip|next)(?:吧|了|啦|啊|呢)?$",
+        r"^(?:这个|这题|这道题|这个问题)?(?:先)?(?:跳过|过吧|过了|pass|skip)$",
+        r"^(?:你)?(?:已经)?问过了(?:吧)?$",
+    ]
+    return any(re.fullmatch(pattern, compact) for pattern in explicit_skip_patterns)
 
 
 def _max_follow_ups_for_interview(total_rounds: int) -> int:
@@ -977,6 +1008,9 @@ async def send_message_stream(interview_id: int, msg: schemas.MessageSend, db: S
             if plan["is_intro_move"]:
                 llm_resp = {"action": "MOVE_NEXT", "text": _first_question_message(plan["target_next_text"])}
                 yield _sse({"type": "delta", "text": llm_resp["text"]})
+            elif plan["is_final_move"]:
+                llm_resp = {"action": "CLOSE", "text": _closing_message()}
+                yield _sse({"type": "delta", "text": llm_resp["text"]})
             elif plan["force_transition"]:
                 llm_resp = {"action": "MOVE_NEXT", "text": _move_next_message(plan["target_next_text"], skipped=plan["skipped_or_boundary"])}
                 yield _sse({"type": "delta", "text": llm_resp["text"]})
@@ -1502,6 +1536,7 @@ def _plan_interview_turn(ctx: dict, db: Session, user_id: int) -> dict:
     force_next = ""
     max_follow_ups = _max_follow_ups_for_interview(n)
     follow_up_limit_reached = bool(last_main_q) and current_follow_up_count >= max_follow_ups
+    follow_up_available = bool(last_main_q) and max_follow_ups > 0 and current_follow_up_count < max_follow_ups
     force_transition = skipped_or_boundary
     if skipped_or_boundary:
         force_next = "【系统指令：强制切换】候选人已表达不会、跳过或指出问题重复。必须结束当前问题，不要重复追问同一个知识点，直接进入下一题。"
@@ -1515,14 +1550,25 @@ def _plan_interview_turn(ctx: dict, db: Session, user_id: int) -> dict:
 
     # Check if this is the absolute last round
     is_final_move = False
+    is_final_budget_pending = False
     if question_count >= n:
-        is_final_move = True
         target_next_text = _closing_message()
-        force_next = (
-            "【系统指令：面试结束】这是最后一轮。请先用一句话承接候选人刚才的回答，"
-            "再明确说明本轮模拟面试已结束并将生成评估报告。禁止再提出任何新问题、追问或引导后续对话。"
-            "输出的 text 必须以【面试结束】开头。"
-        )
+        force_transition = False
+        if follow_up_available and not skipped_or_boundary:
+            is_final_budget_pending = True
+            force_next = (
+                "【系统指令：最后一题】当前已经没有下一道主题目。"
+                "如果候选人刚才的回答明显缺少关键得分点，可以选择 FOLLOW_UP，只追问一个具体问题；"
+                "如果回答已经足够或不需要追问，必须选择 MOVE_NEXT 来结束面试。"
+                "禁止在 MOVE_NEXT 的结束语里提出任何新问题。"
+            )
+        else:
+            is_final_move = True
+            force_next = (
+                "【系统指令：面试结束】这是最后一轮。请先用一句话承接候选人刚才的回答，"
+                "再明确说明本轮模拟面试已结束并将生成评估报告。禁止再提出任何新问题、追问或引导后续对话。"
+                "输出的 text 必须以【面试结束】开头。"
+            )
     else:
         target_next_text = target_q_obj["question"]
 
@@ -1540,6 +1586,7 @@ def _plan_interview_turn(ctx: dict, db: Session, user_id: int) -> dict:
         "skipped_or_boundary": skipped_or_boundary,
         "is_intro_move": last_main_q is None,
         "is_final_move": is_final_move,
+        "is_final_budget_pending": is_final_budget_pending,
         "target_next_text": target_next_text,
         "knowledge_points": _knowledge_points_for_prompt(db, interview, user_id),
         "expected_points": _expected_points_for_main_question(role_key, interview, last_main_q),
@@ -1550,7 +1597,7 @@ def _postprocess_llm_resp(llm_resp: dict, plan: dict, ai_msgs: list) -> dict:
     """Apply closing, project-deepdive forcing, and repeated-follow-up guards."""
     if plan["is_final_move"]:
         llm_resp["action"] = "CLOSE"
-        llm_resp["text"] = _normalize_closing_text(llm_resp.get("text", ""))
+        llm_resp["text"] = _closing_message()
         return llm_resp
 
     if plan["current_stage"] == "resume" and plan.get("has_resume"):
@@ -1572,9 +1619,23 @@ def _postprocess_llm_resp(llm_resp: dict, plan: dict, ai_msgs: list) -> dict:
         and _is_repeated_ai_question(llm_resp.get("text", ""), ai_msgs)
     )
     if repeated_follow_up:
+        llm_resp["action"] = "CLOSE" if plan.get("is_final_budget_pending") else "MOVE_NEXT"
+        llm_resp["text"] = _closing_message() if plan.get("is_final_budget_pending") else _move_next_message(plan["target_next_text"], skipped=False)
+    if llm_resp.get("action") == "FOLLOW_UP" and plan.get("follow_up_limit_reached"):
         llm_resp["action"] = "MOVE_NEXT"
         llm_resp["text"] = _move_next_message(plan["target_next_text"], skipped=False)
+    if plan.get("is_final_budget_pending") and llm_resp.get("action") != "FOLLOW_UP":
+        llm_resp["action"] = "CLOSE"
+        llm_resp["text"] = _closing_message()
     return llm_resp
+
+
+def _follow_up_category_for_plan(plan: dict) -> str:
+    last_main_q = plan.get("last_main_q")
+    main_category = (getattr(last_main_q, "category", "") or "").strip()
+    if main_category in MAIN_QUESTION_CATEGORIES:
+        return f"{main_category}_FOLLOW_UP"
+    return f"{plan['current_stage']}_FOLLOW_UP"
 
 
 def _finalize_ai_turn(db: Session, ctx: dict, plan: dict, llm_resp: dict):
@@ -1586,7 +1647,11 @@ def _finalize_ai_turn(db: Session, ctx: dict, plan: dict, llm_resp: dict):
     final_is_ended = False
     # End only on the explicit closing plan, or on the legacy MOVE_NEXT/CLOSE
     # signal after the configured main-question budget has been exhausted.
-    if plan.get("is_final_move") or (question_count >= n and llm_resp["action"] in {"MOVE_NEXT", "CLOSE"}):
+    if (
+        plan.get("is_final_move")
+        or (plan.get("is_final_budget_pending") and llm_resp["action"] in {"MOVE_NEXT", "CLOSE"})
+        or (question_count >= n and llm_resp["action"] in {"MOVE_NEXT", "CLOSE"})
+    ):
         final_is_ended = True
         interview.status = "completed"
         interview.end_time = interview.end_time or datetime.utcnow()
@@ -1594,8 +1659,8 @@ def _finalize_ai_turn(db: Session, ctx: dict, plan: dict, llm_resp: dict):
 
     msg_category = plan["current_stage"]
     if llm_resp["action"] == "FOLLOW_UP":
-        msg_category = f"{plan['current_stage']}_FOLLOW_UP"
-    elif plan.get("is_final_move"):
+        msg_category = _follow_up_category_for_plan(plan)
+    elif plan.get("is_final_move") or llm_resp["action"] == "CLOSE":
         msg_category = "closing"
 
     is_follow_up = llm_resp["action"] == "FOLLOW_UP"
@@ -1608,7 +1673,7 @@ def _finalize_ai_turn(db: Session, ctx: dict, plan: dict, llm_resp: dict):
         follow_index = ctx["current_follow_up_count"] + 1
         question_id = f"{parent_qid}:followup:{follow_index}"
         source = "llm_follow_up"
-    elif plan.get("is_final_move"):
+    elif plan.get("is_final_move") or llm_resp["action"] == "CLOSE":
         round_index = None
         question_id = "closing"
         source = "system_closing"
@@ -1646,6 +1711,8 @@ async def process_message_logic(interview_id: int, content: str, db: Session, us
     # 6. Generate AI Response
     if plan["is_intro_move"]:
         llm_resp = {"action": "MOVE_NEXT", "text": _first_question_message(plan["target_next_text"])}
+    elif plan["is_final_move"]:
+        llm_resp = {"action": "CLOSE", "text": _closing_message()}
     elif plan["force_transition"]:
         llm_resp = {"action": "MOVE_NEXT", "text": _move_next_message(plan["target_next_text"], skipped=plan["skipped_or_boundary"])}
     else:

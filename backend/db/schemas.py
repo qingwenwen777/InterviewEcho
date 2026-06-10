@@ -182,7 +182,7 @@ class CodeProblemListItem(BaseModel):
     slug: str
     difficulty: str
     tags: List[str]
-    source: str = "Hot100"
+    source: str = "Hot200"
     solved: bool = False
     judgable: bool = False
     sample_count: int = 0

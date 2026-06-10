@@ -5988,8 +5988,8 @@ strong {
 
 .round-review-card-head {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 24px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
   align-items: start;
   padding-bottom: 16px;
   border-bottom: 1px solid rgba(0, 0, 0, 0.08);
@@ -6218,6 +6218,11 @@ strong {
 
 .resume-match-grid {
   gap: 14px;
+  padding: 0 !important;
+  overflow: visible !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
 }
 
 .resume-match-grid .note-block {

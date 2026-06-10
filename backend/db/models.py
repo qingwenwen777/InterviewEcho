@@ -154,7 +154,7 @@ class CodeProblem(Base):
     samples = Column(Text, nullable=False)
     constraints = Column(Text, nullable=False)
     starter_code = Column(Text, nullable=False)
-    source = Column(String(50), default="Hot100")
+    source = Column(String(50), default="Hot200")
     is_active = Column(Boolean, default=True)
     order_index = Column(Integer, default=0)
     created_at = Column(TIMESTAMP, default=datetime.utcnow)

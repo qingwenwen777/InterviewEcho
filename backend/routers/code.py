@@ -64,7 +64,7 @@ def _problem_list_item(problem: models.CodeProblem, solved_ids: set, sample_coun
         slug=problem.slug,
         difficulty=problem.difficulty,
         tags=_safe_json(problem.tags, []),
-        source=problem.source or "Hot100",
+        source=problem.source or "Hot200",
         solved=problem.id in solved_ids,
         judgable=test_count > 0,
         sample_count=sample_count,

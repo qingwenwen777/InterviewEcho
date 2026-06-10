@@ -1272,7 +1272,7 @@ def _solve_roman(text):
     return str(total)
 
 
-PROBLEM_DEFINITIONS = {
+PRACTICE_PROBLEM_BANK = {
     "trapping-rain-water-acm": {
         "description": "给定每个位置的柱子高度，雨后水只会被左右更高的柱子围住。请计算总接水量。",
         "input_format": "第一行输入整数 n。第二行输入 n 个非负整数表示高度。",
@@ -1998,7 +1998,7 @@ PROBLEM_DEFINITIONS = {
 
 def build_practice_problem(index, spec, problem_builder, tc_builder):
     title, slug, difficulty, tags = spec
-    definition = PROBLEM_DEFINITIONS[slug]
+    definition = PRACTICE_PROBLEM_BANK[slug]
     solver = definition["solver"]
     samples = [
         {

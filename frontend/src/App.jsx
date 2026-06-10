@@ -3400,7 +3400,6 @@ function RoundReviewCarousel({ reviews, activeIndex, onChange }) {
               key={`round-review-${review.round || index + 1}-${index}`}
               review={review}
               index={index}
-              total={total}
               hidden={index !== activeIndex}
             />
           ))}
@@ -3423,7 +3422,7 @@ function RoundReviewCarousel({ reviews, activeIndex, onChange }) {
   )
 }
 
-function RoundReviewCard({ review, index, total, hidden }) {
+function RoundReviewCard({ review, index, hidden }) {
   const scoreItems = [
     { label: '内容', value: review.content_score },
     { label: '表达', value: review.expression_score },
@@ -3437,10 +3436,6 @@ function RoundReviewCard({ review, index, total, hidden }) {
         <div>
           <span>第 {String(review.round || index + 1).padStart(2, '0')} 轮</span>
           <h3>{review.question || '本轮问题未记录。'}</h3>
-        </div>
-        <div className="round-review-total">
-          {String(index + 1).padStart(2, '0')}
-          <small>/ {String(total).padStart(2, '0')}</small>
         </div>
       </header>
 
@@ -3925,13 +3920,13 @@ function CodePracticePage() {
   return (
     <div className="page code-page enter-page">
       <PageHeader
-        eyebrow="Hot100 ACM"
+        eyebrow="Hot200 ACM"
         title="代码练习"
       />
 
       <section className="code-hero-strip">
         <div>
-          <span>Hot100</span>
+          <span>Hot200</span>
           <strong>{problems.length || 100}</strong>
         </div>
         <div>
@@ -4326,7 +4321,7 @@ function CodeProblemPage() {
 
       <div className="code-detail-title">
         <div>
-          <span className="eyebrow">Hot100 / ACM</span>
+          <span className="eyebrow">Hot200 / ACM</span>
           <h1>{problem.title}</h1>
           <p>{problem.description}</p>
         </div>

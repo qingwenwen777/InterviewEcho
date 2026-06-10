@@ -511,7 +511,7 @@ JUDGABLE_PROBLEMS = [
 ]
 
 
-PLACEHOLDER_SPECS = [
+PRACTICE_PROBLEM_SPECS = [
     ("接雨水", "trapping-rain-water-acm", "困难", ["数组", "双指针", "栈"]),
     ("最小覆盖窗口", "minimum-window-substring-acm", "困难", ["字符串", "滑动窗口", "哈希表"]),
     ("有效字母异位词", "valid-anagram-acm", "简单", ["字符串", "哈希表"]),
@@ -595,40 +595,26 @@ PLACEHOLDER_SPECS = [
 ]
 
 
-def _build_legacy_placeholder_problem(index, spec):
-    title, slug, difficulty, tags = spec
-    topic = "、".join(tags)
-    return {
-        "id": index,
-        "title": title,
-        "slug": slug,
-        "difficulty": difficulty,
-        "tags": tags,
-        "description": f"{title} 是 Hot100 的 {topic} 方向练习。当前版本已预留 ACM 模式题面结构，完整隐藏测试将在后续增量补齐。",
-        "input_format": "输入格式占位：本题将采用完整程序从 stdin 读取数据，不提供函数签名。",
-        "output_format": "输出格式占位：程序需向 stdout 输出最终答案，末尾换行不影响判定。",
-        "samples": [
-            {
-                "input": "",
-                "output": "",
-                "explanation": "该题暂未开放判题，仅作为 Hot100 结构占位。",
-            }
-        ],
-        "constraints": ["题目元数据已入库", "隐藏测试待补齐后即可开放判题"],
-        "starter_code": deepcopy(BASE_STARTER_CODE),
-        "test_cases": [],
-    }
-
-
-def build_placeholder_problem(index, spec):
+def build_practice_problem_from_spec(index, spec):
     from .code_problem_practice_bank import build_practice_problem
 
     return build_practice_problem(index, spec, problem, tc)
 
 
-def get_hot100_problems():
+def build_extra_problem(index, spec):
+    from .code_problem_extra_bank import build_extra_problem as build_problem
+
+    return build_problem(index, spec, problem, tc)
+
+
+def get_code_problems():
     problems = list(JUDGABLE_PROBLEMS)
     next_id = len(problems) + 1
-    for offset, spec in enumerate(PLACEHOLDER_SPECS[: max(0, 100 - len(problems))]):
-        problems.append(build_placeholder_problem(next_id + offset, spec))
+    for offset, spec in enumerate(PRACTICE_PROBLEM_SPECS):
+        problems.append(build_practice_problem_from_spec(next_id + offset, spec))
+    from .code_problem_extra_bank import get_extra_problem_specs
+
+    next_id = len(problems) + 1
+    for offset, spec in enumerate(get_extra_problem_specs()):
+        problems.append(build_extra_problem(next_id + offset, spec))
     return problems
