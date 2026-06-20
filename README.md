@@ -439,31 +439,6 @@ python backend\tests\test_skip_detection.py
 Remove-Item Env:\PYTHONPATH -ErrorAction SilentlyContinue
 ```
 
-## 不要提交的内容
-
-这些内容不应该提交到 Git：
-
-```text
-.env
-backend/.env
-frontend/.env
-frontend/.env.local
-frontend/node_modules/
-frontend/dist/
-backend/.venv/
-backend/__pycache__/
-backend/rag/vector_index.json
-backend/rag/chroma_db/
-uploads/
-logs/
-*.log
-*.wav
-*.mp3
-*.webm
-```
-
-`.env.example` 可以提交，用来说明需要哪些配置项，但不要放真实密钥。
-
 ## 相关文档
 
 - `docs/project-overview.md`：项目说明、架构设计、模块划分和数据模型。
